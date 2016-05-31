@@ -1,6 +1,7 @@
 {-# LANGUAGE GADTs             #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TupleSections     #-}
 
 
 -- | A module responsible for identifying occurrences of the
@@ -13,14 +14,14 @@ module NLP.Skladnica.Walenty
 
 
 import           Control.Monad               (forM_, guard)
-import           Control.Applicative         ((<|>))
+import           Control.Applicative         ((<|>), empty)
 -- import qualified Control.Monad.State.Strict as E
 import qualified Control.Monad.Reader        as E
-import           Control.Monad.Trans.Maybe   (MaybeT (..))
+import           Control.Monad.Trans.Maybe   (MaybeT (..), mapMaybeT)
 
 import           Data.Either                 (lefts)
 import qualified Data.Map.Strict             as M
-import           Data.Maybe                  (isJust, mapMaybe)
+import           Data.Maybe                  (isJust, mapMaybe, catMaybes)
 import qualified Data.Set                    as S
 import           Data.Text                   (Text)
 import qualified Data.Text.Lazy              as L
@@ -424,10 +425,10 @@ evaluate (IfThenElse b e1 e2) t = do
     else evaluate e2 t
 evaluate (Satisfy p) node = return (p node)
 evaluate (Current e) t = evaluate e (S.rootLabel t)
-evaluate (Child p e) t = withParent t $
-  or <$> sequence
-    [ evaluate e s
-    | (s, h) <- S.subForest t, p h ]
+evaluate (Child p e) t = withParent t $ evaluate (SkipChild p e) t
+--   or <$> sequence
+--     [ evaluate e s
+--     | (s, h) <- S.subForest t, p h ]
 evaluate (SkipChild p e) t =
   or <$> sequence
     [ evaluate e s
@@ -473,25 +474,25 @@ type MarkState = EvalState
 type Mark = MaybeT (E.Reader MarkState)
 
 
--- -- | Run the evaluation monad.
--- runMark
---   :: Expr SklTree
---   -> SklTree -- ^ Parent tree
---   -> SklTree -- ^ Child tree
---   -> Bool
--- runMark expr parent child =
---   -- E.evalState (evaluate expr child) (EvalState parent)
---   E.runReader (evaluate expr child) (EvalState parent)
+-- | Run the evaluation monad.
+runMark
+  :: Expr SklTree
+  -> SklTree -- ^ Parent tree
+  -> SklTree -- ^ Child tree
+  -> Maybe SklTree
+runMark expr parent child =
+  flip E.runReader (EvalState parent) $
+    runMaybeT $ mark expr child
 
 
--- -- | Set the underlying parent tree to the new one.
--- withParent :: SklTree -> Eval a -> Eval a
--- withParent t = E.withReader $ \_ -> EvalState {parentTree = t}
---
---
--- -- | Get the current parent node.
--- getParent :: Eval SklTree
--- getParent = parentTree <$> E.ask
+-- | Set the underlying parent tree to the new one.
+withParent' :: SklTree -> Mark a -> Mark a
+withParent' t = mapMaybeT $ E.withReader (\_ -> EvalState {parentTree = t})
+
+
+-- | Get the current parent node.
+getParent' :: Mark SklTree
+getParent' = E.asks parentTree
 
 
 -- | Evaluate the query w.r.t. the given Skladnica tree.
@@ -512,22 +513,42 @@ mark (Satisfy p) node = maybeT $ case p node of
   False -> Nothing
   True  -> Just node
 mark (Current e) t =
+  -- note that here we assume that nodes do not change
   t <$ mark e (S.rootLabel t)
--- evaluate (Child p e) t = withParent t $
---   or <$> sequence
---     [ evaluate e s
---     | (s, h) <- S.subForest t, p h ]
--- evaluate (SkipChild p e) t =
---   or <$> sequence
---     [ evaluate e s
---     | (s, h) <- S.subForest t, p h ]
--- evaluate (Satisfy2 p) childNode = do
---   parentNode <- S.rootLabel <$> getParent
---   return $ p parentNode childNode
--- evaluate NonBranching t = case S.subForest t of
---   [] -> return True
---   [x] -> evaluate NonBranching (fst x)
---   _ -> return False
+mark (Child p e) t = withParent' t $ mark (SkipChild p e) t
+mark (SkipChild p e) t = do
+  -- here we need to enforce that one of the children
+  -- satisfies the expression `e`.
+  forest <- go $ S.subForest t
+  return $ t {S.subForest = forest}
+  where
+    go [] = empty
+    go (x@(s, h) : xs)
+      -- below we mark the processed element
+      | p h = (\y -> (y, S.HeadYes) : xs) <$> mark e s
+          <|> (x :) <$> go xs
+      | otherwise = (x :) <$> go xs
+mark (Satisfy2 p) childNode = do
+  parentNode <- S.rootLabel <$> getParent'
+  if p parentNode childNode
+    then return childNode
+    else empty
+mark NonBranching t = case S.subForest t of
+  [] -> return t
+  [x] -> t <$ mark NonBranching (fst x)
+  _ -> empty
+
+
+-- | Find tree node satisfying the given query expression.
+findNodes'
+  :: Expr SklTree
+  -> SklTree
+  -> [SklTree]
+-- findNodes e t = filter (evaluate Nothing e) (subTrees t)
+findNodes' e t =
+  let xs = map fst $ S.subForest t
+   in catMaybes [runMark e t x | x <- xs] ++
+      concatMap (findNodes' e) xs
 
 
 ------------------------------------------------------------------------------
@@ -570,10 +591,12 @@ runTest skladnicaDir walentyPath expansionPath = do
         -- print verb
         -- putStrLn ""
         let expr = querify verb
-            mweTrees = findNodes expr sklTree
+            mweTrees = findNodes' expr sklTree
         E.when (not $ null mweTrees) $ do
           putStrLn "" >> print verb >> putStrLn ""
-          putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
+          -- putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
+          forM_ mweTrees $ \mweTree -> do
+            putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ mweTree
   where
     simpLab = L.unpack . either S.cat S.orth . S.label
     showTree = R.drawTree . fmap simpLab . S.simplify
