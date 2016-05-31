@@ -20,12 +20,13 @@ import           Control.Monad.Trans.Maybe   (MaybeT (..))
 import           Data.Either                 (lefts)
 import qualified Data.Map.Strict             as M
 import           Data.Maybe                  (isJust, mapMaybe)
+import qualified Data.Set                    as S
 import           Data.Text                   (Text)
 import qualified Data.Text.Lazy              as L
 import           Data.Tree                   as R
 
-import qualified System.Directory as D
-import qualified System.FilePath.Find as F
+import qualified System.Directory            as D
+import qualified System.FilePath.Find        as F
 
 import qualified NLP.Skladnica               as S
 import qualified NLP.Walenty                 as W
@@ -234,29 +235,34 @@ stdPhraseQ phrase = case phrase of
         , dependentsQ dependents
         ]
     ]
-  -- TODO: Don't know how to handle this yet
-  W.ComparP{..} -> B False
-  -- TODO: starding from here, we care about the lexical
-  -- constraints only
-  W.CP{..} -> andQ
-    [ Current $ andQ
-      [ hasCat "fzd" ]
-    , anyChild $ andQ
-      [ lexicalQ lexicalHead
-      , dependentsQ dependents ]
-    ]
-  -- TODO: this is for sure incorrect for certain cases, where we should
-  -- look deeper to find the head...
-  p -> andQ
-    [ lexicalQ (W.lexicalHead p)
-    , dependentsQ (W.dependents p)
-    ]
-  -- TODO: False by default...
-  _ -> B False
+  -- Don't know how to handle this yet, and it is not handled
+  -- by the default handler below (which referes to dependents)
+  W.ComparP{} -> B False
+  -- By default we check if (a) lexical requirements are satisfied for the
+  -- argument itself, directly, or (b) for one of its children, which makes
+  -- sense for certain phrase types (e.g., `CP`)
+  p ->
+    let checkLex = andQ
+          [ lexicalQ (W.lexicalHead p)
+          , dependentsQ (W.dependents p) ]
+    in  checkLex `Or` skipAnyChild checkLex
+
+--   W.CP{..} -> andQ
+--     [ Current $ andQ
+--       [ hasCat "fzd" ]
+--     , anyChild $ andQ
+--       [ lexicalQ lexicalHead
+--       , dependentsQ dependents ]
+--     ]
 
 
 specPhraseQ :: W.SpecPhrase -> Expr SklTree
-specPhraseQ _ = B True
+specPhraseQ p = case p of
+  W.XP{..} -> maybeQ xpVal phraseQ
+  -- TODO: not handled yet
+  W.Fixed{} -> B False
+  _ -> B True
+-- specPhraseQ _ = B True
 
 
 -- | Constraints on lexical heads.
@@ -473,9 +479,15 @@ runTest
   -> FilePath -- ^ Walenty Expansion file
   -> IO ()
 runTest skladnicaDir walentyPath expansionPath = do
+  expMap <- W.readExpMap expansionPath
   -- read *lexicalized* verbal entries from Walenty
-  walenty <- mapMaybe P.pruneVerb . lefts
-    <$> W.readWalenty expansionPath walentyPath
+  walenty <-
+       S.toList . S.fromList
+     . map (W.expandVerb expMap)
+     . mapMaybe P.pruneVerb
+     . lefts
+    <$> W.readWalenty walentyPath
+  putStr "Number of lexical entries: " >> print (length walenty)
   -- find all XML files
   xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
@@ -490,6 +502,7 @@ runTest skladnicaDir walentyPath expansionPath = do
         let expr = querify verb
             mweTrees = findNodes expr sklTree
         E.when (not $ null mweTrees) $ do
+          putStrLn "" >> print verb >> putStrLn ""
           putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
   where
     simpLab = L.unpack . either S.cat S.orth . S.label

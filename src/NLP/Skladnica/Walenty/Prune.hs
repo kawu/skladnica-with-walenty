@@ -49,11 +49,12 @@ prunePhrase (W.Special s) = W.Special <$> pruneSpec s
 
 -- | Prune the special phrase.
 pruneSpec :: W.SpecPhrase -> Maybe W.SpecPhrase
-pruneSpec p@W.Fixed{} = Just p
+pruneSpec p@W.ComPrepNP{} = Just p
 pruneSpec p@W.XP{} = do
   val <- prunePhrase =<< (W.xpVal p)
   return $ p {W.xpVal = Just val}
 pruneSpec _ = Nothing
+-- pruneSpec p@W.Fixed{} = Just p
 
 
 pruneStd :: W.StdPhrase -> Maybe W.StdPhrase
