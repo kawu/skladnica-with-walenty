@@ -12,23 +12,28 @@ module NLP.Skladnica.Walenty
 ) where
 
 
-import           Control.Monad             (forM_, guard)
+import           Control.Monad               (forM_, guard)
 -- import qualified Control.Monad.State.Strict as E
-import qualified Control.Monad.Reader      as E
-import           Control.Monad.Trans.Maybe (MaybeT (..))
+import qualified Control.Monad.Reader        as E
+import           Control.Monad.Trans.Maybe   (MaybeT (..))
 
-import           Data.Either               (lefts)
-import qualified Data.Map.Strict           as M
-import           Data.Maybe                (isJust)
-import           Data.Text                 (Text)
-import qualified Data.Text.Lazy            as L
-import           Data.Tree                 as R
+import           Data.Either                 (lefts)
+import qualified Data.Map.Strict             as M
+import           Data.Maybe                  (isJust, mapMaybe)
+import           Data.Text                   (Text)
+import qualified Data.Text.Lazy              as L
+import           Data.Tree                   as R
 
-import qualified NLP.Skladnica             as S
-import qualified NLP.Walenty               as W
-import qualified NLP.Walenty.Types         as W
+import qualified System.Directory as D
+import qualified System.FilePath.Find as F
 
-import           Debug.Trace               (trace)
+import qualified NLP.Skladnica               as S
+import qualified NLP.Walenty                 as W
+import qualified NLP.Walenty.Types           as W
+
+import qualified NLP.Skladnica.Walenty.Prune as P
+
+-- import           Debug.Trace               (trace)
 
 
 --------------------------------------------------------------------------------
@@ -77,13 +82,12 @@ data Expr a where
   -- Run the query over the current node
   Current :: Expr S.Node -> Expr SklTree
   -- The current node has to be an immediate parent of a tree which
-  -- satisfied the given query/expression
-  Child :: Expr SklTree -> Expr SklTree
+  -- satisfied the given query/expression; headedness of the parent-child
+  -- relation can be checked.
+  Child :: (S.IsHead -> Bool) -> Expr SklTree -> Expr SklTree
   -- Like `Child` but doesn't update the parent node
   -- (useful for agreement constraints)
-  SkipChild :: Expr SklTree -> Expr SklTree
-  -- Like `Child`, but applies to the head child only
-  Head :: Expr SklTree -> Expr SklTree
+  SkipChild :: (S.IsHead -> Bool) -> Expr SklTree -> Expr SklTree
   -- Check that the tree is non-branching
   NonBranching :: Expr SklTree
 
@@ -93,7 +97,7 @@ data Expr a where
 ancestor
   :: Expr SklTree -- ^ A tree expression to be satisfied by the ancestor.
   -> Expr SklTree
-ancestor e = Child (Or e (ancestor e))
+ancestor e = anyChild (Or e (ancestor e))
 
 
 -- | Check if one of the nodes present on the trunk
@@ -102,7 +106,7 @@ ancestor e = Child (Or e (ancestor e))
 trunk
   :: Expr S.Node
   -> Expr SklTree
-trunk e = Or (Current e) (Head (trunk e))
+trunk e = Or (Current e) (headChild (trunk e))
 
 
 -- | AND query consisting of a list of expressions.
@@ -115,6 +119,27 @@ andQ [] = B True
 orQ :: [Expr a] -> Expr a
 orQ (x : xs) = Or x (orQ xs)
 orQ [] = B False
+
+
+maybeQ :: Maybe a -> (a -> Expr b) -> Expr b
+maybeQ mx e = case mx of
+  Nothing -> B True
+  Just x -> e x
+
+
+-- | Take a head child.
+headChild :: Expr SklTree -> Expr SklTree
+headChild = Child $ \h -> h == S.HeadYes
+
+
+-- | Take any child.
+anyChild :: Expr SklTree -> Expr SklTree
+anyChild = Child $ const True
+
+
+-- | Skip any child.
+skipAnyChild :: Expr SklTree -> Expr SklTree
+skipAnyChild = SkipChild $ const True
 
 
 --------------------------------------------------------------------------------
@@ -142,7 +167,18 @@ querify verb = andQ
 -- is realized by a different tree child node!
 frameQ :: W.Frame -> Expr SklTree
 -- frameQ frame = andQ $ map (Child . Child . argumentQ) frame
-frameQ frame = andQ $ map (Child . metaArgQ) frame
+frameQ frame = andQ $ map (anyChild . metaArgQ) frame
+
+
+-- | Pseudo-frame in which one or more of the arguments must be realized.
+-- Useful within the context of constraints on dependents, which are
+-- called "frames" but are not really.
+--
+-- TODO: Difficult choice, sometimes it seems that all dependents specified
+-- in `RAtr` should be present, sometimes that only some of them...
+pseudoFrameQ :: W.Frame -> Expr SklTree
+-- pseudoFrameQ frame = orQ $ map (Child . metaArgQ) frame
+pseudoFrameQ = frameQ
 
 
 -- | Handle (and ignore) nodes explicitely marked
@@ -151,7 +187,7 @@ metaArgQ :: W.Argument -> Expr SklTree
 metaArgQ arg =
   IfThenElse
     isMetaNode
-    (SkipChild argument)
+    (skipAnyChild argument)
     argument
   where
     argument = argumentQ arg
@@ -173,10 +209,14 @@ phraseQ p = case p of
 
 stdPhraseQ :: W.StdPhrase -> Expr SklTree
 stdPhraseQ phrase = case phrase of
-  W.NP{..} -> Current $ andQ
-    [ hasCat "fno"
-    , caseQ caseG
-    , maybeQ agrNumber agreeNumQ
+  W.NP{..} -> andQ
+    [ Current $ andQ
+      [ hasCat "fno"
+      , caseQ caseG
+      , maybeQ agrNumber agreeNumQ ]
+    , andQ
+      [ lexicalQ lexicalHead
+      , dependentsQ dependents ]
     ]
   W.PrepNP{..} -> andQ
     [ Current $ andQ
@@ -187,28 +227,61 @@ stdPhraseQ phrase = case phrase of
     -- we "skip" the child so that potential agreement works
     -- between the parent of PP and the NP (not sure if this
     -- is necessary)
-    , SkipChild $ andQ
+    , skipAnyChild $ andQ
         [ Current $ hasCat "fno"
         , Current $ maybeQ agrNumber agreeNumQ
-        , case lexicalHead of
-            [] -> B True
-            xs -> trunk (hasBases xs)
-        , case dependents of
-            W.NAtr -> NonBranching
-            _ -> B True
+        , lexicalQ lexicalHead
+        , dependentsQ dependents
         ]
     ]
-  _ -> B True
+  -- TODO: Don't know how to handle this yet
+  W.ComparP{..} -> B False
+  -- TODO: starding from here, we care about the lexical
+  -- constraints only
+  W.CP{..} -> andQ
+    [ Current $ andQ
+      [ hasCat "fzd" ]
+    , anyChild $ andQ
+      [ lexicalQ lexicalHead
+      , dependentsQ dependents ]
+    ]
+  -- TODO: this is for sure incorrect for certain cases, where we should
+  -- look deeper to find the head...
+  p -> andQ
+    [ lexicalQ (W.lexicalHead p)
+    , dependentsQ (W.dependents p)
+    ]
+  -- TODO: False by default...
+  _ -> B False
 
 
 specPhraseQ :: W.SpecPhrase -> Expr SklTree
 specPhraseQ _ = B True
 
 
-maybeQ :: Maybe a -> (a -> Expr b) -> Expr b
-maybeQ mx e = case mx of
-  Nothing -> B True
-  Just x -> e x
+-- | Constraints on lexical heads.
+lexicalQ :: [Text] -> Expr SklTree
+lexicalQ xs = if null xs
+  then B True
+  else trunk (hasBases xs)
+
+
+-- | Constraints stemming from the requirements over
+-- the dependents.
+dependentsQ :: W.Attribute -> Expr SklTree
+dependentsQ deps = case deps of
+  -- no modifiers allowed
+  W.NAtr -> NonBranching
+  -- modifiers allowed but optional; TODO: we could check that all modifiers
+  -- present are consistent with the given `Atr` list.
+  W.Atr _ -> B True
+  -- TODO: not distinguished from `Atr` case.
+  W.Atr1 _ -> B True
+  -- at least one of the attributes given in the list must be present
+  W.RAtr xs -> pseudoFrameQ xs
+  -- TODO: we should check that there is at most one modifier.
+  W.RAtr1 xs -> pseudoFrameQ xs
+  _ -> B True
 
 
 -- | Skladnica case value based on the Walenty case value.
@@ -347,18 +420,14 @@ evaluate (IfThenElse b e1 e2) t = do
     else evaluate e2 t
 evaluate (Satisfy p) node = return (p node)
 evaluate (Current e) t = evaluate e (S.rootLabel t)
-evaluate (Child e) t = withParent t $
+evaluate (Child p e) t = withParent t $
   or <$> sequence
     [ evaluate e s
-    | (s, _) <- S.subForest t ]
-evaluate (SkipChild e) t =
+    | (s, h) <- S.subForest t, p h ]
+evaluate (SkipChild p e) t =
   or <$> sequence
     [ evaluate e s
-    | (s, _) <- S.subForest t ]
-evaluate (Head e) t = withParent t $
-  or <$> sequence
-    [ evaluate e s
-    | (s, S.HeadYes) <- S.subForest t ]
+    | (s, h) <- S.subForest t, p h ]
 evaluate (Satisfy2 p) childNode = do
   parentNode <- S.rootLabel <$> getParent
   return $ p parentNode childNode
@@ -390,29 +459,44 @@ findNodes e t =
 --------------------------------------------------------------------------------
 
 
+-- | Recursively retrieve all Xml files from the given directory.
+getXmlFiles :: FilePath -> IO [FilePath]
+getXmlFiles dir = do
+  F.find F.always (F.fileName F.~~? "*.xml") dir
+
+
 -- | Read all verb entries from Walenty and search for them
 -- in Skladnica treebank.
 runTest
-  :: FilePath -- ^ Skladnica XML file
+  :: FilePath -- ^ Skladnica directory
   -> FilePath -- ^ Walenty file
   -> FilePath -- ^ Walenty Expansion file
   -> IO ()
-runTest skladnicaXML walentyPath expansionPath = do
-  -- read verbal entries from Walenty
-  walenty <- lefts <$> W.readWalenty expansionPath walentyPath
-  -- take nodes from Skladnica XML file
-  nodesDAG <- S.mkDAG <$> S.readTop skladnicaXML
-  -- construct skladnica tree(s); normally there is only
-  -- one chosen tree
-  let sklTree = S.forest S.chosen 0 nodesDAG !! 0
-      simpLab = L.unpack . either S.cat S.orth . S.label
-  putStrLn . R.drawTree . fmap simpLab . S.simplify $ sklTree
-  forM_ walenty $ \verb -> do
-    print verb
-    putStrLn ""
-    let expr = querify verb
-        mweTrees = findNodes expr sklTree
-    putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
+runTest skladnicaDir walentyPath expansionPath = do
+  -- read *lexicalized* verbal entries from Walenty
+  walenty <- mapMaybe P.pruneVerb . lefts
+    <$> W.readWalenty expansionPath walentyPath
+  -- find all XML files
+  xmlFiles <- getXmlFiles skladnicaDir
+  -- per each XML file...
+  forM_ xmlFiles $ \skladnicaXML -> do
+    putStrLn skladnicaXML
+    sklForest <- forestFromXml skladnicaXML
+    forM_ sklForest $ \sklTree -> do
+      -- putStrLn $ showTree sklTree
+      forM_ walenty $ \verb -> do
+        -- print verb
+        -- putStrLn ""
+        let expr = querify verb
+            mweTrees = findNodes expr sklTree
+        E.when (not $ null mweTrees) $ do
+          putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
+  where
+    simpLab = L.unpack . either S.cat S.orth . S.label
+    showTree = R.drawTree . fmap simpLab . S.simplify
+    forestFromXml xml = do
+      nodesDAG <- S.mkDAG <$> S.readTop xml
+      return $ S.forest S.chosen 0 nodesDAG
 
 
 --------------------------------------------------------------------------------
@@ -447,7 +531,3 @@ takeLeft (Right _) = Nothing
 
 takeRight (Left _) = Nothing
 takeRight (Right x) = Just x
-
-
-maybeT :: Monad m => Maybe a -> MaybeT m a
-maybeT = MaybeT . return
