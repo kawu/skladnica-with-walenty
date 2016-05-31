@@ -13,6 +13,7 @@ module NLP.Skladnica.Walenty
 
 
 import           Control.Monad               (forM_, guard)
+import           Control.Applicative         ((<|>))
 -- import qualified Control.Monad.State.Strict as E
 import qualified Control.Monad.Reader        as E
 import           Control.Monad.Trans.Maybe   (MaybeT (..))
@@ -407,9 +408,6 @@ getParent = parentTree <$> E.ask
 
 
 -- | Evaluate the query w.r.t. the given Skladnica tree.
---
--- TODO: Parent tree/node could be moved to an underlying state
---
 evaluate
   :: Expr a -- ^ Expression to evaluate
   -> a      -- ^ Element on which to run the evaluation (tree, node, etc.)
@@ -458,6 +456,78 @@ findNodes e t =
 -- -- | Take all subtrees of the given skladnica tree.
 -- subTrees :: SklTree -> [SklTree]
 -- subTrees t = t : concatMap subTrees (map fst $ S.subForest t)
+
+
+--------------------------------------------------------------------------------
+-- Alternative Query Evaluation
+--------------------------------------------------------------------------------
+
+
+-- | State underlying evaluation; we store information about the parent node
+-- just in case.
+type MarkState = EvalState
+
+
+-- | Evaluation monad.
+-- type Eval = E.State EvalState
+type Mark = MaybeT (E.Reader MarkState)
+
+
+-- -- | Run the evaluation monad.
+-- runMark
+--   :: Expr SklTree
+--   -> SklTree -- ^ Parent tree
+--   -> SklTree -- ^ Child tree
+--   -> Bool
+-- runMark expr parent child =
+--   -- E.evalState (evaluate expr child) (EvalState parent)
+--   E.runReader (evaluate expr child) (EvalState parent)
+
+
+-- -- | Set the underlying parent tree to the new one.
+-- withParent :: SklTree -> Eval a -> Eval a
+-- withParent t = E.withReader $ \_ -> EvalState {parentTree = t}
+--
+--
+-- -- | Get the current parent node.
+-- getParent :: Eval SklTree
+-- getParent = parentTree <$> E.ask
+
+
+-- | Evaluate the query w.r.t. the given Skladnica tree.
+--
+mark
+  :: Expr a -- ^ Expression to evaluate
+  -> a      -- ^ Element on which to run the evaluation (tree, node, etc.)
+  -> Mark a -- ^ Potentially marked element, if satisfies the given expression
+mark (B b) x = maybeT $ case b of
+  False -> Nothing
+  True  -> Just x
+mark (And x y) t =
+  mark x t >>= mark y
+mark (Or x y) t = mark x t <|> mark y t
+mark (IfThenElse b e1 e2) t = do
+  (mark b t >>= mark e1) <|> mark e2 t
+mark (Satisfy p) node = maybeT $ case p node of
+  False -> Nothing
+  True  -> Just node
+mark (Current e) t =
+  t <$ mark e (S.rootLabel t)
+-- evaluate (Child p e) t = withParent t $
+--   or <$> sequence
+--     [ evaluate e s
+--     | (s, h) <- S.subForest t, p h ]
+-- evaluate (SkipChild p e) t =
+--   or <$> sequence
+--     [ evaluate e s
+--     | (s, h) <- S.subForest t, p h ]
+-- evaluate (Satisfy2 p) childNode = do
+--   parentNode <- S.rootLabel <$> getParent
+--   return $ p parentNode childNode
+-- evaluate NonBranching t = case S.subForest t of
+--   [] -> return True
+--   [x] -> evaluate NonBranching (fst x)
+--   _ -> return False
 
 
 ------------------------------------------------------------------------------
@@ -544,3 +614,7 @@ takeLeft (Right _) = Nothing
 
 takeRight (Left _) = Nothing
 takeRight (Right x) = Just x
+
+
+maybeT :: Monad m => Maybe a -> MaybeT m a
+maybeT = MaybeT . return
