@@ -10,6 +10,7 @@
 
 module NLP.Skladnica.Walenty.Search
 ( SklTree
+, terminals
 , Expr (..)
 , querify
 , findNodes
@@ -19,20 +20,21 @@ module NLP.Skladnica.Walenty.Search
 ) where
 
 
-import           Control.Monad               (guard)
-import           Control.Applicative         ((<|>), empty)
+import           Control.Applicative       (empty, (<|>))
+import           Control.Monad             (guard)
 -- import qualified Control.Monad.State.Strict as E
-import qualified Control.Monad.Reader        as E
-import           Control.Monad.Trans.Maybe   (MaybeT (..), mapMaybeT)
+import qualified Control.Monad.Reader      as E
+import           Control.Monad.Trans.Maybe (MaybeT (..), mapMaybeT)
 
-import qualified Data.Map.Strict             as M
-import           Data.Maybe                  (isJust, catMaybes, fromMaybe)
-import           Data.List                   (foldl')
-import           Data.Text                   (Text)
-import qualified Data.Text.Lazy              as L
+import           Data.Foldable             (foldMap)
+import           Data.List                 (foldl')
+import qualified Data.Map.Strict           as M
+import           Data.Maybe                (catMaybes, fromMaybe, isJust)
+import           Data.Text                 (Text)
+import qualified Data.Text.Lazy            as L
 
-import qualified NLP.Skladnica               as S
-import qualified NLP.Walenty.Types           as W
+import qualified NLP.Skladnica             as S
+import qualified NLP.Walenty.Types         as W
 
 -- import           Debug.Trace               (trace)
 
@@ -54,6 +56,17 @@ type AttrVal = Text
 
 -- | Skladnica tree.
 type SklTree = S.Tree S.Node S.IsHead
+
+
+-- | Retrieve terminal leaves of the given tree.
+terminals
+  :: SklTree
+  -> [S.Term]
+terminals =
+  let getTerm S.Node{..} = case label of
+        Left _  -> []
+        Right t -> [t]
+  in foldMap getTerm . S.simplify
 
 
 -- | A boolean query to be evaluated over a node of a syntactic tree.
@@ -564,9 +577,15 @@ markAll es t =
 -- TODO: the parent is set to the tree itself...
 markOne :: Expr SklTree -> SklTree -> SklTree
 -- markOne e t = fromMaybe t $ runMark (ancestor e) t t
-markOne e t = undefined
--- TODO: this one works incorrectly because it marks as heads an
--- entire path needed to get to the MWE.
+markOne e t =
+  go t t
+  where
+    go parent tree =
+      let subForest =
+            [ (go tree child, h)
+            | (child, h) <- S.subForest tree ]
+          tree' = tree {S.subForest = subForest}
+      in fromMaybe tree' $ runMark e parent tree'
 
 
 --------------------------------------------------------------------------------

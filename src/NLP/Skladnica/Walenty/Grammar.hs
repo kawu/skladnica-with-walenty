@@ -23,6 +23,8 @@ import qualified Data.Set                   as S
 import           Data.Text.Lazy             (Text)
 import qualified Data.Tree                  as R
 
+-- NLP.Partage.DAG: for Ord R.Tree instance
+import           NLP.Partage.DAG            ()
 import qualified NLP.Partage.Tree.Other     as O
 
 import qualified NLP.Skladnica              as S
@@ -171,8 +173,8 @@ onLeft prev ((curr, stat) : rest) =
 -------------------------------------------------
 
 
--- | Again, a standalone Ord instance for rose trees...
-deriving instance Ord a => Ord (R.Tree a)
+-- -- | Again, a standalone Ord instance for rose trees...
+-- deriving instance Ord a => Ord (R.Tree a)
 
 
 -- | A TAG elementary tree.

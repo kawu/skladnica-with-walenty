@@ -30,6 +30,8 @@ library
       , skladnica           >= 0.1      && < 0.2
       , walenty             >= 0.1      && < 0.2
       , partage             >= 0.2      && < 0.3
+      , data-memocombinators >= 0.5     && < 0.6
+      , pipes               >= 4.1      && < 4.2
 
     exposed-modules:
         NLP.Skladnica.Walenty
