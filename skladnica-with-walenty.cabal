@@ -32,7 +32,9 @@ library
 
     exposed-modules:
         NLP.Skladnica.Walenty
+      , NLP.Skladnica.Walenty.Search
       , NLP.Skladnica.Walenty.Prune
+      , NLP.Skladnica.Walenty.Grammar
 
     ghc-options: -Wall
 
