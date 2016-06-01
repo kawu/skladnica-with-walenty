@@ -14,6 +14,8 @@ module NLP.Skladnica.Walenty.Search
 , querify
 , findNodes
 , markNodes
+, markOne
+, markAll
 ) where
 
 
@@ -24,7 +26,8 @@ import qualified Control.Monad.Reader        as E
 import           Control.Monad.Trans.Maybe   (MaybeT (..), mapMaybeT)
 
 import qualified Data.Map.Strict             as M
-import           Data.Maybe                  (isJust, catMaybes)
+import           Data.Maybe                  (isJust, catMaybes, fromMaybe)
+import           Data.List                   (foldl')
 import           Data.Text                   (Text)
 import qualified Data.Text.Lazy              as L
 
@@ -92,10 +95,12 @@ data Expr a where
 
 -- | Build a complex `ancestor` tree expression.
 -- Note that the resulting expression is infinite...
-_ancestor
+-- Note that we consider the tree itself as its ancestor.
+ancestor
   :: Expr SklTree -- ^ A tree expression to be satisfied by the ancestor.
   -> Expr SklTree
-_ancestor e = anyChild (Or e (_ancestor e))
+-- ancestor e = anyChild (Or e (ancestor e))
+ancestor e = Or e (anyChild (ancestor e))
 
 
 -- | Check if one of the nodes present on the trunk
@@ -469,7 +474,9 @@ type MarkState = EvalState
 type Mark = MaybeT (E.Reader MarkState)
 
 
--- | Run the evaluation monad.
+-- | Run the `Mark` monad, i.e. match the given expression
+-- against the given (child) tree and, if the match is found,
+-- returned the tree with the expression matched.
 runMark
   :: Expr SklTree
   -> SklTree -- ^ Parent tree
@@ -491,7 +498,6 @@ getParent' = E.asks parentTree
 
 
 -- | Evaluate the query w.r.t. the given Skladnica tree.
---
 mark
   :: Expr a -- ^ Expression to evaluate
   -> a      -- ^ Element on which to run the evaluation (tree, node, etc.)
@@ -544,6 +550,23 @@ markNodes e t =
   let xs = map fst $ S.subForest t
    in catMaybes [runMark e t x | x <- xs] ++
       concatMap (markNodes e) xs
+
+
+-- | Match all the given expressions against all the nodes
+-- in the given tree and mark the identified occurences.
+markAll :: [Expr SklTree] -> SklTree -> SklTree
+markAll es t =
+  foldl' (flip markOne) t es
+
+
+-- | Mark the tree with an occurence of the given expression.
+-- Anywhere in the tree.
+-- TODO: the parent is set to the tree itself...
+markOne :: Expr SklTree -> SklTree -> SklTree
+-- markOne e t = fromMaybe t $ runMark (ancestor e) t t
+markOne e t = undefined
+-- TODO: this one works incorrectly because it marks as heads an
+-- entire path needed to get to the MWE.
 
 
 --------------------------------------------------------------------------------

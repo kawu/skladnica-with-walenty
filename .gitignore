@@ -16,5 +16,6 @@ cabal.sandbox.config
 .stack-work/
 skladnica
 walenty
+partage
 TAGS
 data

@@ -1,24 +1,32 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE RecordWildCards    #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 
 -- | Provisional grammar extraction module.
 
 
 module NLP.Skladnica.Walenty.Grammar
-(
+( ET
+, Status (..)
+, topShatter
+, prepTree
 ) where
 
 
-import           Control.Monad     (guard)
+import           Control.Monad              (guard)
+import qualified Control.Monad.State.Strict as E
 
-import qualified Data.Map.Strict   as M
-import           Data.Maybe        (isJust)
-import qualified Data.Tree         as R
+import qualified Data.Map.Strict            as M
+import           Data.Maybe                 (isJust)
+import qualified Data.Set                   as S
+import           Data.Text.Lazy             (Text)
+import qualified Data.Tree                  as R
 
+import qualified NLP.Partage.Tree.Other     as O
 
-import qualified NLP.Skladnica     as S
-import qualified NLP.Walenty.Types as W
+import qualified NLP.Skladnica              as S
+import qualified NLP.Walenty.Types          as W
 
 
 -------------------------------------------------
@@ -46,6 +54,8 @@ status
 status xs = case xs of
   [] -> Trunk -- not really important what we return in this case
   (curLab, curHead) : (parLab, parHead) : _
+    | curHead == S.HeadYes &&
+      parHead == S.HeadYes -> Trunk
     | parLab `is` "fw" &&
       hasAttrIn parLab "tfw"
         ["sentp(że)"]    -> Trunk
@@ -156,254 +166,190 @@ onLeft prev ((curr, stat) : rest) =
     _               -> None : onLeft None rest
 
 
--- -- -------------------------------------------------
--- -- -- Grammar extraction
--- -- -------------------------------------------------
--- --
--- --
--- -- -- | Again, a standalone Ord instance for rose trees...
--- -- deriving instance Ord a => Ord (R.Tree a)
--- --
--- --
--- -- -- | A TAG elementary tree.
--- -- type ET = O.Tree L.Text L.Text
--- --
--- --
--- -- -- | Store the ET in the underlying set.
--- -- store :: ET -> E.State (S.Set ET) ()
--- -- store = E.modify' . S.insert
--- --
--- --
--- -- -- | Top-level `shatter`
--- -- topShatter :: R.Tree (Label, Status) -> S.Set ET
--- -- topShatter =
--- --   let doit x = shatter x >>= store
--- --   in  flip E.execState S.empty . doit
--- --
--- --
--- -- -- | Shatter a given parsed tree into the set of the component
--- -- -- elementary trees.
--- -- shatter :: R.Tree (Label, Status) -> E.State (S.Set ET) ET
--- -- shatter r
--- --   | null (R.subForest r) = do
--- --       let x = getTerm' r
--- --       return $ R.Node (O.Term x) []
--- --   | otherwise = do
--- --       let rootNT = labelNT . fst $ R.rootLabel r
--- --           childLabs = map R.rootLabel $ R.subForest r
--- --           left = onLeft (Parent rootNT) childLabs
--- --       children' <- fst <$> go rootNT left (R.subForest r)
--- --       return $ R.Node (O.NonTerm $ cat rootNT) children'
--- --   where
--- --     go rootNT [] [] = return ([], Parent rootNT)
--- --     go rootNT (left:lefts) (child:children) = do
--- --       let (childLab, childStat) = R.rootLabel child
--- --       (children', right) <- go rootNT lefts children
--- --       child' <- shatter child
--- --       case (childLab, childStat) of
--- --         (Left x, Trunk)  -> return (child':children', Sister x)
--- --         (Right _, Trunk) -> return (child':children', None)
--- --         (Left x, Arg) -> do
--- --           store child'
--- --           let childNT = O.NonTerm $ cat x
--- --           return (R.Node childNT [] : children', None)
--- --         (Right _, Arg) -> error "shatter.go: obligatory terminal argument!?"
--- --         (_, Modif) -> case (left, right) of
--- --           (Parent x, _) -> (children', right) <$ store (child' `leftMod` x)
--- --           (_, Parent y) -> (children', right) <$ store (child' `rightMod` y)
--- --           (Sister x, _) -> (children', right) <$ store (child' `rightMod` x)
--- --           (_, Sister y) -> (children', right) <$ store (child' `leftMod` y)
--- --           (None, None) -> do
--- --             store (child' `leftMod` rootNT)
--- --             let newChild = R.Node (O.NonTerm $ cat rootNT) children'
--- --             return ([newChild], Sister rootNT)
--- --     go _ _ _ = error "shatter.go: different lengths of the input lists"
--- --
--- --
--- -- -- | Construct a left modifier from a given (initial,
--- -- -- but this is not checked!) ET.
--- -- leftMod :: ET -> NonTerm -> ET
--- -- leftMod t nonTerm = R.Node (O.NonTerm x)
--- --   [ t
--- --   , R.Node (O.Foot x) [] ]
--- --   where x = cat nonTerm
--- --
--- --
--- -- -- | Construct a right modifier from a given (initial,
--- -- -- but this is not checked!) ET.
--- -- rightMod :: ET -> NonTerm -> ET
--- -- rightMod t nonTerm = R.Node (O.NonTerm x)
--- --   [ R.Node (O.Foot x) []
--- --   , t ]
--- --   where x = cat nonTerm
--- --
--- --
--- -- -- -- | Top-level `shatter`
--- -- -- topShatter :: Tree Node IsHead -> S.Set ET
--- -- -- topShatter =
--- -- --   let doit x = shatter x >>= store
--- -- --   in  flip E.execState S.empty . doit
--- -- --
--- -- --
--- -- -- -- | Shatter a given parsed tree into the set of the component
--- -- -- -- elementary trees.
--- -- -- shatter :: Tree Node IsHead -> E.State (S.Set ET) ET
--- -- -- shatter r
--- -- --   | null (subForest r) = do
--- -- --       let x = getTerm' r
--- -- --       return $ R.Node (O.Term x) []
--- -- --   | otherwise = do
--- -- --       let (subTrees0, areHeads) = unzip (subForest r)
--- -- --       subTrees <- forM (zip subTrees0 areHeads) $
--- -- --         \(t, isHead) -> shatterChild r t isHead
--- -- --       let x = Just (getNT' r)
--- -- --       return $ R.Node (O.NonTerm x) subTrees
--- -- --
--- -- --
--- -- -- shatterChild
--- -- --   :: Tree Node IsHead -- ^ Parent
--- -- --   -> Tree Node IsHead -- ^ Child
--- -- --   -> IsHead           -- ^ Child is a head?
--- -- --   -> E.State (S.Set ET) ET
--- -- -- shatterChild parentTree childTree isHead = do
--- -- --   childET <- shatter childTree
--- -- --   if ( isHead == HeadYes || rootLabel childTree
--- -- --              `isObligatory` rootLabel parentTree ) then do
--- -- --     -- this should cover the case of a terminal child
--- -- --     return childET
--- -- --   else if rootLabel childTree `isModifier`
--- -- --           rootLabel parentTree then do
--- -- --     store $ mkLeftModifier childET
--- -- --     let parentNT = Just (getNT' parentTree)
--- -- --     return $ R.Node
--- -- --       (O.NonTerm parentNT)
--- -- --       [R.Node (O.NonTerm Nothing) []]
--- -- --   else do
--- -- --     -- substitution
--- -- --     store childET
--- -- --     let childNT  = Just (getNT' childTree)
--- -- --     return $ R.Node (O.NonTerm childNT) []
--- --
--- --
--- -- -------------------------------------------------
--- -- -- Grammar extraction
--- -- -------------------------------------------------
--- --
--- --
--- -- data WalkStats = WalkStats
--- --   { gramSet :: S.Set ET
--- --   -- ^ The resulting grammar
--- --   , seenNum :: Int
--- --   -- ^ The number of seen files
--- --   , parsedNum :: Int
--- --   -- ^ The number of parsed files (i.e., for which at least one
--- --   -- parsed tree has been extracted)
--- --   } deriving (Show, Eq, Ord)
--- --
--- --
--- -- showWalkStats WalkStats{..} = do
--- --   putStr "SEEN: " >> print seenNum
--- --   putStr "PARSED: " >> print parsedNum
--- --   putStr "GRAM TREES: " >> print (S.size gramSet)
--- --
--- --
--- -- -- | Extract grammar from all files present (directly or not) in a give directory.
--- -- walkAndRead :: FilePath -> IO ()
--- -- walkAndRead root = do
--- --   paths <- pathWalkLazy root
--- --   walkStats <- flip E.execStateT emptyStats $ do
--- --     forM_ paths $ \(root, _dirs, files) -> do
--- --       forM_ files $ \file -> do
--- --         E.when ("-s.xml" `isSuffixOf` file) $ do
--- --           procPath $ joinPath [root, file]
--- --   showWalkStats walkStats
--- --   forM_ (S.toList $ gramSet walkStats) $
--- --     putStrLn . R.drawTree . fmap show
--- --   where
--- --     emptyStats = WalkStats S.empty 0 0
--- --     procPath path = do
--- --       E.lift $ putStrLn $ ">>> " ++ path ++ " <<<"
--- --       E.modify' $ \st -> st {seenNum = seenNum st + 1}
--- --       dag <- E.lift $ mkDAG <$> readTop path
--- --       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
--- --       -- printExtracted dag
--- --       let est = case forest chosen 0 dag of
--- --             tree : _ -> topShatter . prepTree $ mapFst label tree
--- --             [] -> S.empty
--- --       E.when (S.null est) $ do
--- --         E.lift $ putStrLn "Something went wrong..." -- >> putStrLn ""
--- --       E.modify' $ \st -> st
--- --         { parsedNum = parsedNum st + if S.null est then 0 else 1
--- --         , gramSet = gramSet st `S.union` est }
--- --       E.when (not $ S.null est) $ do
--- --         g <- E.gets gramSet
--- --         let trees = map (fmap show) (S.toList est)
--- --         length (R.drawForest trees) `seq` E.lift $ do
--- --           putStr "Current number of trees: "
--- --           print $ S.size g
--- --
--- --
--- -- -------------------------------------------------
--- -- -- Utils
--- -- -------------------------------------------------
--- --
--- --
--- -- -- -- | Obtain non-terminal from ET's root.
--- -- -- getNT :: ET -> L.Text
--- -- -- getNT t =
--- -- --   case R.rootLabel t of
--- -- --     O.NonTerm (Just x) -> x
--- -- --     _ -> error "getNT: invalid input ET"
--- --
--- --
+-------------------------------------------------
+-- Grammar extraction
+-------------------------------------------------
+
+
+-- | Again, a standalone Ord instance for rose trees...
+deriving instance Ord a => Ord (R.Tree a)
+
+
+-- | A TAG elementary tree.
+type ET = O.Tree Text Text
+
+
+-- | Store the ET in the underlying set.
+store :: ET -> E.State (S.Set ET) ()
+store = E.modify' . S.insert
+
+
+-- | Top-level `shatter`
+topShatter :: R.Tree (S.Label, Status) -> S.Set ET
+topShatter =
+  let doit x = shatter x >>= store
+  in  flip E.execState S.empty . doit
+
+
+-- | Shatter a given parsed tree into the set of the component
+-- elementary trees.
+shatter :: R.Tree (S.Label, Status) -> E.State (S.Set ET) ET
+shatter r
+  | null (R.subForest r) = do
+      let x = getTerm' r
+      return $ R.Node (O.Term x) []
+  | otherwise = do
+      let rootNT = labelNT . fst $ R.rootLabel r
+          childLabs = map R.rootLabel $ R.subForest r
+          left = onLeft (Parent rootNT) childLabs
+      children' <- fst <$> go rootNT left (R.subForest r)
+      return $ R.Node (O.NonTerm $ S.cat rootNT) children'
+  where
+    go rootNT [] [] = return ([], Parent rootNT)
+    go rootNT (left:lefts) (child:children) = do
+      let (childLab, childStat) = R.rootLabel child
+      (children', right) <- go rootNT lefts children
+      child' <- shatter child
+      case (childLab, childStat) of
+        (Left x, Trunk)  -> return (child':children', Sister x)
+        (Right _, Trunk) -> return (child':children', None)
+        (Left x, Arg) -> do
+          store child'
+          let childNT = O.NonTerm $ S.cat x
+          return (R.Node childNT [] : children', None)
+        (Right _, Arg) -> error "shatter.go: obligatory terminal argument!?"
+        (_, Modif) -> case (left, right) of
+          (Parent x, _) -> (children', right) <$ store (child' `leftMod` x)
+          (_, Parent y) -> (children', right) <$ store (child' `rightMod` y)
+          (Sister x, _) -> (children', right) <$ store (child' `rightMod` x)
+          (_, Sister y) -> (children', right) <$ store (child' `leftMod` y)
+          (None, None) -> do
+            store (child' `leftMod` rootNT)
+            let newChild = R.Node (O.NonTerm $ S.cat rootNT) children'
+            return ([newChild], Sister rootNT)
+    go _ _ _ = error "shatter.go: different lengths of the input lists"
+
+
+-- | Construct a left modifier from a given (initial,
+-- but this is not checked!) ET.
+leftMod :: ET -> S.NonTerm -> ET
+leftMod t nonTerm = R.Node (O.NonTerm x)
+  [ t
+  , R.Node (O.Foot x) [] ]
+  where x = S.cat nonTerm
+
+
+-- | Construct a right modifier from a given (initial,
+-- but this is not checked!) ET.
+rightMod :: ET -> S.NonTerm -> ET
+rightMod t nonTerm = R.Node (O.NonTerm x)
+  [ R.Node (O.Foot x) []
+  , t ]
+  where x = S.cat nonTerm
+
+
+-------------------------------------------------
+-- Grammar extraction
+-------------------------------------------------
+
+
+-- -- | Extract grammar from all files present (directly or not) in a give directory.
+-- walkAndRead :: FilePath -> IO ()
+-- walkAndRead root = do
+--   paths <- pathWalkLazy root
+--   walkStats <- flip E.execStateT emptyStats $ do
+--     forM_ paths $ \(root, _dirs, files) -> do
+--       forM_ files $ \file -> do
+--         E.when ("-s.xml" `isSuffixOf` file) $ do
+--           procPath $ joinPath [root, file]
+--   showWalkStats walkStats
+--   forM_ (S.toList $ gramSet walkStats) $
+--     putStrLn . R.drawTree . fmap show
+--   where
+--     emptyStats = WalkStats S.empty 0 0
+--     procPath path = do
+--       E.lift $ putStrLn $ ">>> " ++ path ++ " <<<"
+--       E.modify' $ \st -> st {seenNum = seenNum st + 1}
+--       dag <- E.lift $ mkDAG <$> readTop path
+--       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
+--       -- printExtracted dag
+--       let est = case forest chosen 0 dag of
+--             tree : _ -> topShatter . prepTree $ mapFst label tree
+--             [] -> S.empty
+--       E.when (S.null est) $ do
+--         E.lift $ putStrLn "Something went wrong..." -- >> putStrLn ""
+--       E.modify' $ \st -> st
+--         { parsedNum = parsedNum st + if S.null est then 0 else 1
+--         , gramSet = gramSet st `S.union` est }
+--       E.when (not $ S.null est) $ do
+--         g <- E.gets gramSet
+--         let trees = map (fmap show) (S.toList est)
+--         length (R.drawForest trees) `seq` E.lift $ do
+--           putStr "Current number of trees: "
+--           print $ S.size g
+--
+--
+-- -------------------------------------------------
+-- -- Utils
+-- -------------------------------------------------
+--
+--
+-- -- -- | Obtain non-terminal from ET's root.
+-- -- getNT :: ET -> L.Text
+-- -- getNT t =
+-- --   case R.rootLabel t of
+-- --     O.NonTerm (Just x) -> x
+-- --     _ -> error "getNT: invalid input ET"
+--
+--
+-- -- | Obtain non-terminal from source tree's root.
+-- getNT' :: Tree Node b -> L.Text
+-- getNT' t =
+--   case label (rootLabel t) of
+--     Left (NonTerm{..}) -> cat
+--     _ -> error "getNT': invalid source tree"
+
+
+-- | Extract the non-terminal from the label (raise an error if not possible).
+labelNT :: S.Label -> S.NonTerm
+labelNT x = case x of
+  Left x -> x
+  _ -> error "labelNT: not a non-terminal"
+
+
 -- -- -- | Obtain non-terminal from source tree's root.
--- -- getNT' :: Tree Node b -> L.Text
--- -- getNT' t =
+-- -- getTerm' :: Tree Node b -> L.Text
+-- -- getTerm' t =
 -- --   case label (rootLabel t) of
--- --     Left (NonTerm{..}) -> cat
--- --     _ -> error "getNT': invalid source tree"
--- --
--- --
--- -- -- | Extract the non-terminal from the label (raise an error if not possible).
--- -- labelNT :: Label -> NonTerm
--- -- labelNT x = case x of
--- --   Left x -> x
--- --   _ -> error "labelNT: not a non-terminal"
--- --
--- --
--- -- -- -- | Obtain non-terminal from source tree's root.
--- -- -- getTerm' :: Tree Node b -> L.Text
--- -- -- getTerm' t =
--- -- --   case label (rootLabel t) of
--- -- --     Right (Term{..}) -> base
--- -- --     _ -> error "getT': invalid source tree"
--- --
--- --
--- -- -- | Obtain non-terminal from source tree's root.
--- -- getTerm' :: R.Tree (Label, a) -> L.Text
--- -- getTerm' l =
--- --   case fst (R.rootLabel l) of
 -- --     Right (Term{..}) -> base
 -- --     _ -> error "getT': invalid source tree"
--- --
--- --
--- -- -- | Print the chosen (simplified) tree represented in the DAG.
--- -- printExtracted :: DAG -> IO ()
--- -- printExtracted dag =
--- --   let tree = forest chosen 0 dag !! 0
--- --       ets  = prepTree $ mapFst label tree
--- --       lab (Left x) = cat x
--- --       lab (Right t) = orth t
--- --    in putStrLn . R.drawTree . fmap (show . Arr.first lab) $ ets
--- --
--- --
--- -- -- | Print the chosen (simplified) tree represented in the DAG.
--- -- printShattered :: DAG -> IO ()
--- -- printShattered dag =
--- --   let tree = forest chosen 0 dag !! 0
--- --       ets  = topShatter . prepTree $ mapFst label tree
--- --    in putStrLn
--- --         . R.drawForest
--- --         . map (fmap show)
--- --         . S.toList
--- --         $ ets
+
+
+-- | Obtain non-terminal from source tree's root.
+getTerm' :: R.Tree (S.Label, a) -> Text
+getTerm' l =
+  case fst (R.rootLabel l) of
+    Right (S.Term{..}) -> base
+    _ -> error "getT': invalid source tree"
+
+
+-- -- | Print the chosen (simplified) tree represented in the DAG.
+-- printExtracted :: DAG -> IO ()
+-- printExtracted dag =
+--   let tree = forest chosen 0 dag !! 0
+--       ets  = prepTree $ mapFst label tree
+--       lab (Left x) = cat x
+--       lab (Right t) = orth t
+--    in putStrLn . R.drawTree . fmap (show . Arr.first lab) $ ets
+--
+--
+-- -- | Print the chosen (simplified) tree represented in the DAG.
+-- printShattered :: DAG -> IO ()
+-- printShattered dag =
+--   let tree = forest chosen 0 dag !! 0
+--       ets  = topShatter . prepTree $ mapFst label tree
+--    in putStrLn
+--         . R.drawForest
+--         . map (fmap show)
+--         . S.toList
+--         $ ets

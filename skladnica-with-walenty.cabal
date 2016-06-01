@@ -25,10 +25,11 @@ library
       , text                >= 1.1      && < 1.3
       , mtl                 >= 2.1      && < 2.3
       , transformers        >= 0.3      && < 0.5
-      , skladnica           >= 0.1      && < 0.2
-      , walenty             >= 0.1      && < 0.2
       , directory           >= 1.2      && < 1.3
       , filemanip           >= 0.3      && < 0.4
+      , skladnica           >= 0.1      && < 0.2
+      , walenty             >= 0.1      && < 0.2
+      , partage             >= 0.2      && < 0.3
 
     exposed-modules:
         NLP.Skladnica.Walenty
