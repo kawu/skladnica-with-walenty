@@ -20,9 +20,11 @@ module NLP.Skladnica.Walenty
 import           Control.Monad                 (forM_, when)
 import qualified Control.Monad.State.Strict    as E
 import           Control.Monad.Trans.Maybe     (MaybeT (..))
+import           Control.Monad.Morph           as Morph
 
 import           Data.Either                   (lefts)
 import           Data.IORef
+import qualified Data.Map.Strict               as M
 import           Data.Maybe                    (mapMaybe)
 import qualified Data.MemoCombinators          as Memo
 import qualified Data.Set                      as S
@@ -108,81 +110,22 @@ runTest skladnicaDir walentyPath expansionPath = do
 data Extract = Extract
   { gramSet   :: S.Set G.ET
   -- ^ The resulting grammar
-  , seenNum   :: Int
-  -- ^ The number of seen files
-  , parsedNum :: Int
-  -- ^ The number of parsed files (i.e., for which at least one
+  , parsedFiles :: S.Set FilePath
+  -- ^ Names of the parsed files (i.e., for which at least one
   -- parsed tree has been extracted)
+  , seenFiles :: S.Set FilePath
+  -- ^ Names of the seen files
+  , mweFiles :: S.Set FilePath
+  -- ^ Names of the files in which WMEs have been found
   } deriving (Show, Eq, Ord)
 
 
 showExtract :: Extract -> IO ()
 showExtract Extract{..} = do
-  putStr "SEEN: " >> print seenNum
-  putStr "PARSED: " >> print parsedNum
+  putStr "PARSED FILES: " >> print (S.size parsedFiles)
+  putStr "SEEN FILES: " >> print (S.size seenFiles)
+  putStr "MWE FILES: " >> print (S.size mweFiles)
   putStr "GRAM TREES: " >> print (S.size gramSet)
-
-
--- -- | Read all verb entries from Walenty and search for them
--- -- in Skladnica treebank.
--- -- Extract the grammar from the resulting syntactic trees
--- -- (both with and without MWEs).
--- runExtraction
---   :: FilePath -- ^ Skladnica directory
---   -> FilePath -- ^ Walenty file
---   -> FilePath -- ^ Walenty expansion file
---   -> IO ()
--- runExtraction skladnicaDir walentyPath expansionPath = do
---   -- read *lexicalized* verbal entries from Walenty
---   walenty <- readWalenty walentyPath expansionPath
---   putStr "Number of lexical entries: " >> print (length walenty)
---   -- find all XML files
---   xmlFiles <- getXmlFiles skladnicaDir
---   -- per each XML file...
---   walkStats <- flip E.execStateT emptyStats $ do
---     forM_ xmlFiles (procPath walenty)
---   showExtract walkStats
---   putStrLn ""
---   forM_ (S.toList $ gramSet walkStats) $
---     putStrLn . R.drawTree . fmap show
---   where
---     emptyStats = Extract S.empty 0 0
---     procPath walenty skladnicaXML = do
---       E.lift $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
---       E.modify' $ \st -> st {seenNum = seenNum st + 1}
---       sklForest <- E.lift $ forestFromXml skladnicaXML
---       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
---       -- printExtracted dag
---       let exprs = map Q.querify walenty
---       forM_ sklForest $ \sklTree -> do
---         let mweTree = Q.markAll exprs sklTree
---             sklETs  = G.topShatter . G.prepTree . S.mapFst S.label $ sklTree
---             mweETs = G.topShatter . G.prepTree . S.mapFst S.label $ mweTree
---             est = sklETs `S.union` mweETs
---         when (mweTree /= sklTree) $ do
---           E.lift $ putStrLn "MWEs found..."
---         when (S.null est) $ do
---           E.lift $ putStrLn "WARNING: something went wrong..." -- >> putStrLn ""
---         E.modify' $ \st -> st
---           { parsedNum = parsedNum st + if S.null est then 0 else 1
---           , gramSet = gramSet st `S.union` est }
---         when (not $ S.null est) $ do
---           g <- E.gets gramSet
---           let trees = map (fmap show) (S.toList est)
---           length (R.drawForest trees) `seq` E.lift $ do
---             putStr "Current number of trees: "
---             print $ S.size g
---         let realMweETs = mweETs `S.difference` sklETs
---         when (not $ S.null realMweETs) $ do
---           E.lift $ putStrLn "MWE elementary trees found:\n"
---           let trees = map (fmap show) (S.toList realMweETs)
---           E.lift $ putStrLn $ R.drawForest trees
---         -- recognition tests
---         currGram <- E.gets gramSet
---         let dag = buildGram currGram
---         E.lift $ do
---           putStr "Can recognize: "
---           print =<< recognize dag (baseForms sklTree)
 
 
 -- | Read all verb entries from Walenty and search for them
@@ -201,13 +144,15 @@ extractGrammar skladnicaDir walentyPath expansionPath = do
   -- find all XML files
   xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
-  flip E.execStateT emptyStats $ do
+  flip E.execStateT emptyExtract $ do
     forM_ xmlFiles (procPath walenty)
   where
-    emptyStats = Extract S.empty 0 0
+    -- emptyExtract = Extract S.empty 0 0
+    emptyExtract = Extract S.empty S.empty S.empty S.empty
     procPath walenty skladnicaXML = do
       E.lift $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
-      E.modify' $ \st -> st {seenNum = seenNum st + 1}
+      -- E.modify' $ \st -> st {seenNum = seenNum st + 1}
+      E.modify' $ \st -> st {seenFiles = S.insert skladnicaXML (seenFiles st)}
       sklForest <- E.lift $ forestFromXml skladnicaXML
       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
       -- printExtracted dag
@@ -219,10 +164,16 @@ extractGrammar skladnicaDir walentyPath expansionPath = do
             est = sklETs `S.union` mweETs
         when (mweTree /= sklTree) $ do
           E.lift $ putStrLn "MWEs found..."
+          E.modify' $ \st -> st
+            {mweFiles = S.insert skladnicaXML (mweFiles st)}
         when (S.null est) $ do
           E.lift $ putStrLn "WARNING: something went wrong..." -- >> putStrLn ""
         E.modify' $ \st -> st
-          { parsedNum = parsedNum st + if S.null est then 0 else 1
+          -- { parsedNum = parsedNum st + if S.null est then 0 else 1
+          { parsedFiles = parsedFiles st `S.union`
+                          if S.null est
+                          then S.empty
+                          else S.singleton skladnicaXML
           , gramSet = gramSet st `S.union` est }
         when (not $ S.null est) $ do
           g <- E.gets gramSet
@@ -265,66 +216,192 @@ baseForms = map S.base . Q.terminals
 --------------------------------------------------------------------------------
 
 
--- data ParseStats = ParseStats
---   { gramSet   :: S.Set G.ET
---   -- ^ The resulting grammar
---   , seenNum   :: Int
---   -- ^ The number of seen files
---   , parsedNum :: Int
---   -- ^ The number of parsed files (i.e., for which at least one
---   -- parsed tree has been extracted)
---   } deriving (Show, Eq, Ord)
+-- | Global stats.
+data Stats = Stats
+  { mweStatsCheck :: CatStats
+  -- ^ Stats on files with Walenty-based MWEs (checkpoint)
+  , otherStatsCheck :: CatStats
+  -- ^ Stats on files with no Walenty-base MWEs (checkpoint)
+  , mweStatsFinal :: CatStats
+  -- ^ Stats on files with Walenty-based MWEs (final)
+  , otherStatsFinal :: CatStats
+  -- ^ Stats on files with no Walenty-base MWEs (final)
+  } deriving (Show, Eq, Ord)
+
+
+-- | Stats per sentence length.
+type CatStats = M.Map Int AtomStats
+
+
+-- | Stats for given sentence length and given files' category.
+data AtomStats = AtomStats
+  { doneNodes :: Int
+  -- ^ Processed hypergraph nodes
+  , doneEdges :: Int
+  -- ^ Processed hypergraph edges
+  , waitNodes :: Int
+  -- ^ Waiting hypergraph nodes
+  , waitEdges :: Int
+  -- ^ Waiting hypergraph edges
+  , statsNum  :: Int
+  -- ^ Number of stats collected
+  } deriving (Show, Eq, Ord)
+
+
+printAtomStats :: AtomStats -> IO ()
+printAtomStats AtomStats{..} = do
+  putStr (show $ doneNodes `divide` statsNum) >> putStr ","
+  putStr (show $ doneEdges `divide` statsNum) >> putStr ","
+  putStr (show $ waitNodes `divide` statsNum) >> putStr ","
+  putStr (show $ waitEdges `divide` statsNum) >> putStr ","
+  putStrLn (show statsNum)
+
+
+-- | Empty `AtomStats`
+emptyAtomStats :: AtomStats
+emptyAtomStats = AtomStats 0 0 0 0 0
+
+
+atomPlus :: AtomStats -> AtomStats -> AtomStats
+atomPlus x y = AtomStats
+  { doneNodes = doneNodes x + doneNodes y
+  , doneEdges = doneEdges x + doneEdges y
+  , waitNodes = waitNodes x + waitNodes y
+  , waitEdges = waitEdges x + waitEdges y
+  , statsNum = statsNum x + statsNum y }
+
+
+printCatStats :: CatStats -> IO ()
+printCatStats catStats = forM_ (M.toList catStats) $ \(len, atom) -> do
+  putStr (show len)
+  putStr " => "
+  printAtomStats atom
+
+
+printStats :: Stats -> IO ()
+printStats Stats{..} = do
+  putStrLn "===== MWE FILES (CHECKPOINT) ====="
+  printCatStats mweStatsCheck
+  putStrLn "===== MWE FILES (FINAL) ====="
+  printCatStats mweStatsFinal
+  putStrLn "===== OTHER FILES (CHECKPOINT) ====="
+  printCatStats otherStatsCheck
+  putStrLn "===== OTHER FILES (FINAL) ====="
+  printCatStats otherStatsFinal
+
+
+-- | Empty `Stats`
+emptyStats :: Stats
+emptyStats = Stats M.empty M.empty M.empty M.empty
+
+
+updateCatStats :: Int -> AStar.Hype Text Text -> CatStats -> CatStats
+updateCatStats sentLen hype =
+  M.insertWith atomPlus sentLen $ AtomStats
+      { doneNodes = AStar.doneNodesNum hype
+      , doneEdges = AStar.doneEdgesNum hype
+      , waitNodes = AStar.waitingNodesNum hype
+      , waitEdges = AStar.waitingEdgesNum hype
+      , statsNum = 1 }
+
+
+updateMweStatsCheck :: E.MonadState Stats m => Int -> AStar.Hype Text Text -> m ()
+updateMweStatsCheck sentLen hype = E.modify' $ \st -> st
+  { mweStatsCheck = updateCatStats sentLen hype (mweStatsCheck st) }
+
+
+updateOtherStatsCheck :: E.MonadState Stats m => Int -> AStar.Hype Text Text -> m ()
+updateOtherStatsCheck sentLen hype = E.modify' $ \st -> st
+  { otherStatsCheck = updateCatStats sentLen hype (otherStatsCheck st) }
+
+
+updateMweStatsFinal :: E.MonadState Stats m => Int -> AStar.Hype Text Text -> m ()
+updateMweStatsFinal sentLen hype = E.modify' $ \st -> st
+  { mweStatsFinal = updateCatStats sentLen hype (mweStatsFinal st) }
+
+
+updateOtherStatsFinal :: E.MonadState Stats m => Int -> AStar.Hype Text Text -> m ()
+updateOtherStatsFinal sentLen hype = E.modify' $ \st -> st
+  { otherStatsFinal = updateCatStats sentLen hype (otherStatsFinal st) }
 
 
 parsingTest
   :: FilePath   -- ^ Skladnica directory
-  -> S.Set G.ET -- ^ Extracted grammar
+  -> Extract    -- ^ Extracted grammar
   -> Text       -- ^ Start symbol
-  -> Bool       -- ^ Show trees?
+  -> Maybe Int  -- ^ How many trees to show?
   -> IO ()
-parsingTest skladnicaDir gramSet begSym showTrees = do
+parsingTest skladnicaDir Extract{..} begSym showTrees = do
   let gram = buildGram gramSet
       dag = DAG.dagGram gram
       auto = AStar.mkAuto termMemo gram
+--   let termWei = DAG.termWei gram
+--   putStrLn ">>> TERM WEI <<<"
+--   forM_ (M.toList termWei) print
+--   putStrLn "<<< TERM WEI >>>"
   xmlFiles <- getXmlFiles skladnicaDir
-  forM_ xmlFiles (parseAStar dag auto)
+  stats <- flip E.execStateT emptyStats $ do
+    forM_ xmlFiles (parseAStar dag auto)
+  printStats stats
   where
     termMemo = Memo.wrap read show $ Memo.list Memo.char
     -- parseAStar :: DAG.Gram Text Text -> AStar.Auto Text Text -> FilePath -> IO ()
     parseAStar dag auto skladnicaXML = do
-      putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
-      sklForest <- forestFromXml skladnicaXML
+      liftIO $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
+      sklForest <- liftIO $ forestFromXml skladnicaXML
       forM_ sklForest $ \sklTree -> do
         let sent = baseForms sklTree
             input = AStar.fromList sent
-            pipe = AStar.earleyAutoP auto input
+            -- below we make the AStar pipe work in the State monad
+            -- transformer over IO (normally it works just over IO)
+            pipe = Morph.hoist E.lift $ AStar.earleyAutoP auto input
             sentLen = length sent
             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                    && AStar._dagID p == Left begSym
-        contRef <- newIORef True
+        contRef <- E.lift $ newIORef True
         hype <- runEffect . for pipe $ \(item, hype) -> void . runMaybeT $ do
           E.guard =<< liftIO (readIORef contRef)
           AStar.ItemP p <- return item
           E.guard (final p)
-          liftIO $ do
-            putStrLn "<<CHECKPOINT>>" >> printStats hype >> putStrLn ""
-            when showTrees $ mapM_
-              (putStrLn . R.drawTree . fmap show . T.encode . Left)
-              (nubOrd $ AStar.fromPassive p hype)
+          liftIO $ putStrLn "<<CHECKPOINT>>" >> printHypeStats hype >> putStrLn ""
+          if skladnicaXML `S.member` mweFiles
+            then updateMweStatsCheck sentLen hype
+            else updateOtherStatsCheck sentLen hype
+          liftIO $ case showTrees of
+              Nothing -> return ()
+              Just k -> do
+                mapM_
+                  (putStrLn . R.drawTree . fmap show . T.encode . Left)
+                  (take k . nubOrd $ AStar.fromPassive p hype)
+                putStrLn "<<DERIVATIONS>>"
+                ds <- AStar.derivFromPassive p hype input
+                let ds' = map
+                      (AStar.expandDeriv dag . AStar.deriv2tree)
+                      (lefts $ S.toList ds)
+                mapM_
+                  (putStrLn . R.drawTree . fmap show)
+                  (take k ds')
           liftIO $ writeIORef contRef False
-        putStrLn "<<FINISH>>" >> printStats hype
-        let ts = AStar.parsedTrees hype begSym sentLen
+        liftIO $ putStrLn "<<FINISH>>" >> printHypeStats hype
         -- putStr "deriv num: " >> print (length ts)
         -- putStr "tree num: "  >> print (length $ nubOrd ts)  >> putStrLn ""
-        when showTrees $ mapM_
-          (putStrLn . R.drawTree . fmap show . T.encode . Left)
-          (nubOrd ts)
-        when showTrees $ do
-          putStrLn "<<DERIVATIONS>>"
-          ds <- AStar.derivTrees hype begSym input
-          let ds' = map (AStar.expandDeriv dag . AStar.deriv2tree) (S.toList ds)
-          mapM_ (putStrLn . R.drawTree . fmap show) ds'
-    printStats hype = do
+        if skladnicaXML `S.member` mweFiles
+          then updateMweStatsFinal sentLen hype
+          else updateOtherStatsFinal sentLen hype
+        liftIO $ case showTrees of
+          Nothing -> return ()
+          Just k -> do
+            let ts = AStar.parsedTrees hype begSym sentLen
+            mapM_
+              (putStrLn . R.drawTree . fmap show . T.encode . Left)
+              (take k $ nubOrd ts)
+            putStrLn "<<DERIVATIONS>>"
+            ds <- AStar.derivTrees hype begSym input
+            let ds' = map (AStar.expandDeriv dag . AStar.deriv2tree) (S.toList ds)
+            mapM_
+              (putStrLn . R.drawTree . fmap show)
+              (take k ds')
+    printHypeStats hype = do
       putStr "done nodes: " >> print (AStar.doneNodesNum hype)
       putStr "done edges: " >> print (AStar.doneEdgesNum hype)
       putStr "waiting nodes: " >> print (AStar.waitingNodesNum hype)
@@ -351,7 +428,7 @@ fullTest skladnicaDir walentyPath expansionPath = do
   forM_ (S.toList $ gramSet extr) $
     putStrLn . R.drawTree . fmap show
   putStrLn "\n===== PARSING TESTS =====\n"
-  parsingTest skladnicaDir (gramSet extr) "wypowiedzenie" False
+  parsingTest skladnicaDir extr "wypowiedzenie" (Just 1)
 
 
 ------------------------------------------------------------------------------
@@ -391,8 +468,8 @@ forestFromXml xml = do
 --------------------------------------------------
 
 
--- divide :: (Integral a, Integral b) => a -> b -> Double
--- divide x y = (fromIntegral x :: Double) / fromIntegral y
+divide :: (Integral a, Integral b) => a -> b -> Double
+divide x y = (fromIntegral x :: Double) / fromIntegral y
 
 
 nubOrd :: (Ord a) => [a] -> [a]
