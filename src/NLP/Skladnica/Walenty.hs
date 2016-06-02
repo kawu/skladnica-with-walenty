@@ -214,8 +214,8 @@ extractGrammar skladnicaDir walentyPath expansionPath = do
       let exprs = map Q.querify walenty
       forM_ sklForest $ \sklTree -> do
         let mweTree = Q.markAll exprs sklTree
-            sklETs  = G.topShatter . G.prepTree . S.mapFst S.label $ sklTree
-            mweETs = G.topShatter . G.prepTree . S.mapFst S.label $ mweTree
+            sklETs  = G.extractGrammar sklTree
+            mweETs = G.extractGrammar mweTree
             est = sklETs `S.union` mweETs
         when (mweTree /= sklTree) $ do
           E.lift $ putStrLn "MWEs found..."

@@ -9,26 +9,29 @@
 module NLP.Skladnica.Walenty.Grammar
 ( ET
 , Status (..)
+, extractGrammar
 , topShatter
 , prepTree
 ) where
 
 
-import           Control.Monad              (guard)
-import qualified Control.Monad.State.Strict as E
+import           Control.Monad                (guard)
+import qualified Control.Monad.State.Strict   as E
 
-import qualified Data.Map.Strict            as M
-import           Data.Maybe                 (isJust)
-import qualified Data.Set                   as S
-import           Data.Text.Lazy             (Text)
-import qualified Data.Tree                  as R
+import qualified Data.Map.Strict              as M
+import           Data.Maybe                   (isJust)
+import qualified Data.Set                     as S
+import           Data.Text.Lazy               (Text)
+import qualified Data.Tree                    as R
 
 -- NLP.Partage.DAG: for Ord R.Tree instance
-import           NLP.Partage.DAG            ()
-import qualified NLP.Partage.Tree.Other     as O
+import           NLP.Partage.DAG              ()
+import qualified NLP.Partage.Tree.Other       as O
 
-import qualified NLP.Skladnica              as S
-import qualified NLP.Walenty.Types          as W
+import qualified NLP.Skladnica                as S
+import qualified NLP.Walenty.Types            as W
+
+import qualified NLP.Skladnica.Walenty.Search as Q
 
 
 -------------------------------------------------
@@ -186,6 +189,11 @@ store :: ET -> E.State (S.Set ET) ()
 store = E.modify' . S.insert
 
 
+-- | Really, the top-level grammar extraction method.
+extractGrammar :: Q.SklTree -> S.Set ET
+extractGrammar = cleanGrammar . topShatter . prepTree . S.mapFst S.label
+
+
 -- | Top-level `shatter`
 topShatter :: R.Tree (S.Label, Status) -> S.Set ET
 topShatter =
@@ -251,51 +259,32 @@ rightMod t nonTerm = R.Node (O.NonTerm x)
 
 
 -------------------------------------------------
--- Grammar extraction
+-- Grammar clean-up
 -------------------------------------------------
 
 
--- -- | Extract grammar from all files present (directly or not) in a give directory.
--- walkAndRead :: FilePath -> IO ()
--- walkAndRead root = do
---   paths <- pathWalkLazy root
---   walkStats <- flip E.execStateT emptyStats $ do
---     forM_ paths $ \(root, _dirs, files) -> do
---       forM_ files $ \file -> do
---         E.when ("-s.xml" `isSuffixOf` file) $ do
---           procPath $ joinPath [root, file]
---   showWalkStats walkStats
---   forM_ (S.toList $ gramSet walkStats) $
---     putStrLn . R.drawTree . fmap show
---   where
---     emptyStats = WalkStats S.empty 0 0
---     procPath path = do
---       E.lift $ putStrLn $ ">>> " ++ path ++ " <<<"
---       E.modify' $ \st -> st {seenNum = seenNum st + 1}
---       dag <- E.lift $ mkDAG <$> readTop path
---       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
---       -- printExtracted dag
---       let est = case forest chosen 0 dag of
---             tree : _ -> topShatter . prepTree $ mapFst label tree
---             [] -> S.empty
---       E.when (S.null est) $ do
---         E.lift $ putStrLn "Something went wrong..." -- >> putStrLn ""
---       E.modify' $ \st -> st
---         { parsedNum = parsedNum st + if S.null est then 0 else 1
---         , gramSet = gramSet st `S.union` est }
---       E.when (not $ S.null est) $ do
---         g <- E.gets gramSet
---         let trees = map (fmap show) (S.toList est)
---         length (R.drawForest trees) `seq` E.lift $ do
---           putStr "Current number of trees: "
---           print $ S.size g
+-- | Perform cleaning procedures on the grammar.
+-- Notably:
 --
---
--- -------------------------------------------------
--- -- Utils
--- -------------------------------------------------
---
---
+--   * Remove redundant non-terminal repetitions
+cleanGrammar :: S.Set ET -> S.Set ET
+cleanGrammar =
+  S.fromList . map cleanET . S.toList
+  where
+    cleanET tree = case R.subForest tree of
+      [child0] ->
+        let child = cleanET child0
+        in if R.rootLabel tree == R.rootLabel child
+           then child
+           else tree {R.subForest = [child]}
+      xs -> tree {R.subForest = map cleanET xs}
+
+
+-------------------------------------------------
+-- Utils
+-------------------------------------------------
+
+
 -- -- -- | Obtain non-terminal from ET's root.
 -- -- getNT :: ET -> L.Text
 -- -- getNT t =
