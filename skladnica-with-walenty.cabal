@@ -41,6 +41,7 @@ library
       , NLP.Skladnica.Walenty.Search
       , NLP.Skladnica.Walenty.Prune
       , NLP.Skladnica.Walenty.Grammar
+      , NLP.Skladnica.Walenty.Select
 
     ghc-options: -Wall
 

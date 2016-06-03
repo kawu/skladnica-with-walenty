@@ -51,6 +51,7 @@ import qualified NLP.Walenty                   as W
 import qualified NLP.Skladnica.Walenty.Grammar as G
 import qualified NLP.Skladnica.Walenty.Prune   as P
 import qualified NLP.Skladnica.Walenty.Search  as Q
+import qualified NLP.Skladnica.Walenty.Select  as Select
 
 
 ------------------------------------------------------------------------------
@@ -193,9 +194,10 @@ extractGrammar skladnicaDir walentyPath expansionPath = do
 
 -- | Build a grammar from the given set of ETs.
 buildGram
-  :: S.Set G.ET
+  :: M.Map Text Int     -- ^ Frequency map
+  -> S.Set G.ET
   -> DAG.Gram Text Text
-buildGram = DAG.mkGram . map (,1) . S.toList
+buildGram freqMap = DAG.mkFreqGram freqMap . map (,1) . S.toList
 
 
 -- | Check if the given sentence is recognized with the
@@ -429,6 +431,8 @@ printHypeStats hype = do
 -- --         print =<< recognize dag (baseForms sklTree)
 
 
+-- | A custom datatype which facilitates computing the size
+-- of the "optimal" part of the hypergraph. 
 data Result a
   = None
   | Some a
@@ -436,35 +440,53 @@ data Result a
   deriving (Show, Eq, Ord)
 
 
+-- | Parsing configuration.
+data ParseConf = ParseConf
+  { showTrees :: Maybe Int
+  -- ^ How many trees to show?
+  , restrictGrammar :: Bool
+  -- ^ Restrict (supertag) the grammar to match
+  -- the individual sentences?
+  , pickFile :: Double
+  -- ^ Chance to pick a non-MWE file to test
+  , useFreqs :: Bool
+  -- ^ Use frequencies to customize heuristic?
+  } deriving (Show, Eq, Ord)
+
+
 parsingTest
   :: FilePath   -- ^ Skladnica directory
   -> Extract    -- ^ Extracted grammar
   -> Text       -- ^ Start symbol
-  -> Double     -- ^ Chance to pick a non-MWE file to test
-  -> Maybe Int  -- ^ How many trees to show?
+  -> ParseConf  -- ^ Parsing configuration
   -> IO ()
-parsingTest skladnicaDir Extract{..} begSym pickFile showTrees = do
-  let gram = buildGram gramSet
+parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
+  let globGram = buildGram M.empty gramSet
   xmlFiles <- getXmlFiles skladnicaDir
   stats <- flip E.execStateT emptyStats $ do
     forM_ xmlFiles $ \xmlFile -> do
       -- using `seq` to bypass the space-leak
       currStats <- E.get
       length (show currStats) `seq`
-        considerAStar gram xmlFile
+        considerAStar globGram xmlFile
   printStats stats
   where
-    considerAStar gram skladnicaXML = do
+    considerAStar globGram skladnicaXML = do
       i <- liftIO $ Random.randomRIO (0.0, 1.0)
       when (skladnicaXML `S.member` mweFiles || i <= pickFile) $ do
-        parseAStar gram skladnicaXML
-    parseAStar gram skladnicaXML = do
-      let termMemo = Memo.wrap read show $ Memo.list Memo.char
-          auto = AStar.mkAuto termMemo gram
+        parseAStar globGram skladnicaXML
+    parseAStar globGram skladnicaXML = do
       liftIO $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
       sklForest <- liftIO $ forestFromXml skladnicaXML
       forM_ sklForest $ \sklTree -> do
-        let sent = baseForms sklTree
+        let gram = if restrictGrammar
+                      then buildGram M.empty $ Select.select
+                             (S.fromList $ baseForms sklTree)
+                             gramSet
+                      else globGram
+            termMemo = Memo.wrap read show $ Memo.list Memo.char
+            auto = AStar.mkAuto termMemo gram
+            sent = baseForms sklTree
             input = AStar.fromList sent
             -- below we make the AStar pipe work in the State monad
             -- transformer over IO (normally it works just over IO)
@@ -473,23 +495,28 @@ parsingTest skladnicaDir Extract{..} begSym pickFile showTrees = do
             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                    && AStar._dagID p == Left begSym
         contRef <- E.lift $ newIORef None
-        hype <- runEffect . for pipe $ \(item :-> itemWeight, hype) -> void . runMaybeT $ do
-          cont <- liftIO (readIORef contRef)
-          case cont of
-            None -> do
-              AStar.ItemP p <- return item
-              E.guard (final p)
-              liftIO $ putStrLn "<<BEGIN>>" >> printHypeStats hype >> putStrLn ""
-              liftIO $ writeIORef contRef (Some $ getWeight itemWeight)
-            Some optimal -> do
-              -- waiting for the first time that the optimal weight is surpassed
-              E.guard $ getWeight itemWeight > optimal
-              liftIO $ putStrLn "<<CHECKPOINT>>" >> printHypeStats hype >> putStrLn ""
-              if skladnicaXML `S.member` mweFiles
-                then updateMweStatsCheck sentLen hype
-                else updateOtherStatsCheck sentLen hype
-              liftIO $ writeIORef contRef Done
-            Done -> return ()
+        hype <- runEffect . for pipe $ \(item :-> itemWeight, hype) ->
+          void . runMaybeT $ do
+            cont <- liftIO (readIORef contRef)
+            case cont of
+              None -> do
+                AStar.ItemP p <- return item
+                E.guard (final p)
+                liftIO $ do
+                  putStrLn "<<BEGIN>>" >> printHypeStats hype >> putStrLn ""
+                  writeIORef contRef (Some $ getWeight itemWeight)
+              Some optimal -> do
+                -- waiting for the first time that
+                -- the optimal weight is surpassed
+                E.guard $ getWeight itemWeight > optimal
+                liftIO $ do
+                  putStrLn "<<CHECKPOINT>>"
+                  printHypeStats hype >> putStrLn ""
+                if skladnicaXML `S.member` mweFiles
+                  then updateMweStatsCheck sentLen hype
+                  else updateOtherStatsCheck sentLen hype
+                liftIO $ writeIORef contRef Done
+              Done -> return ()
         liftIO $ putStrLn "<<FINISH>>" >> printHypeStats hype
         if skladnicaXML `S.member` mweFiles
           then updateMweStatsFinal sentLen hype
@@ -511,7 +538,12 @@ fullTest skladnicaDir walentyPath expansionPath = do
   forM_ (S.toList $ gramSet extr) $
     putStrLn . R.drawTree . fmap show
   putStrLn "\n===== PARSING TESTS =====\n"
-  parsingTest skladnicaDir extr "wypowiedzenie" 0.0 Nothing -- (Just 1)
+  let conf = ParseConf
+       { showTrees = Nothing -- Just 1
+       , restrictGrammar = False
+       , pickFile = 0.0
+       , useFreqs = False }
+  parsingTest skladnicaDir extr "wypowiedzenie" conf
 
 
 ------------------------------------------------------------------------------
