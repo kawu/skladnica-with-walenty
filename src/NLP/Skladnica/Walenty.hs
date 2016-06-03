@@ -121,6 +121,8 @@ data Extract = Extract
   -- ^ Names of the seen files
   , mweFiles :: S.Set FilePath
   -- ^ Names of the files in which WMEs have been found
+  , freqMap  :: M.Map Text Int
+  -- ^ Frequency map extracted from the treebank
   } deriving (Show, Eq, Ord)
 
 
@@ -130,6 +132,7 @@ showExtract Extract{..} = do
   putStr "SEEN FILES: " >> print (S.size seenFiles)
   putStr "MWE FILES: " >> print (S.size mweFiles)
   putStr "GRAM TREES: " >> print (S.size gramSet)
+  putStr "FREQ MAP: " >> print (M.size freqMap)
 
 
 -- | Read all verb entries from Walenty and search for them
@@ -152,7 +155,7 @@ extractGrammar skladnicaDir walentyPath expansionPath = do
     forM_ xmlFiles (procPath walenty)
   where
     -- emptyExtract = Extract S.empty 0 0
-    emptyExtract = Extract S.empty S.empty S.empty S.empty
+    emptyExtract = Extract S.empty S.empty S.empty S.empty M.empty
     procPath walenty skladnicaXML = do
       E.lift $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
       -- E.modify' $ \st -> st {seenNum = seenNum st + 1}
@@ -178,13 +181,16 @@ extractGrammar skladnicaDir walentyPath expansionPath = do
                           if S.null est
                           then S.empty
                           else S.singleton skladnicaXML
-          , gramSet = gramSet st `S.union` est }
+          , gramSet = gramSet st `S.union` est
+          , freqMap = M.unionWith (+) (freqMap st) (freqMapFrom sklTree) }
         when (not $ S.null est) $ do
-          g <- E.gets gramSet
+          extr <- E.get
           let trees = map (fmap show) (S.toList est)
           length (R.drawForest trees) `seq` E.lift $ do
             putStr "Current number of trees: "
-            print $ S.size g
+            print $ S.size (gramSet extr)
+            putStr "Current number of terminals: "
+            print $ M.size (freqMap extr)
         let realMweETs = mweETs `S.difference` sklETs
         when (not $ S.null realMweETs) $ do
           E.lift $ putStrLn "MWE elementary trees found:\n"
@@ -197,7 +203,14 @@ buildGram
   :: M.Map Text Int     -- ^ Frequency map
   -> S.Set G.ET
   -> DAG.Gram Text Text
-buildGram freqMap = DAG.mkFreqGram freqMap . map (,1) . S.toList
+buildGram fm = DAG.mkFreqGram fm . map (,1) . S.toList
+
+
+-- | Extract frequency map from a tree.
+freqMapFrom
+  :: Q.SklTree
+  -> M.Map Text Int
+freqMapFrom = count . baseForms
 
 
 -- | Check if the given sentence is recognized with the
@@ -214,6 +227,11 @@ baseForms
   :: Q.SklTree
   -> [Text]
 baseForms = map S.base . Q.terminals
+
+
+-- | Count elements in the input list.
+count :: Ord a => [a] -> M.Map a Int
+count = M.fromListWith (+) . map (,1)
 
 
 ------------------------------------------------------------------------------
@@ -449,7 +467,7 @@ data ParseConf = ParseConf
   -- the individual sentences?
   , pickFile :: Double
   -- ^ Chance to pick a non-MWE file to test
-  , useFreqs :: Bool
+  , useFreqs :: M.Map Text Int
   -- ^ Use frequencies to customize heuristic?
   } deriving (Show, Eq, Ord)
 
@@ -461,7 +479,13 @@ parsingTest
   -> ParseConf  -- ^ Parsing configuration
   -> IO ()
 parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
-  let globGram = buildGram M.empty gramSet
+  let globGram = buildGram useFreqs gramSet
+  ----------------------------------
+  let termWei = DAG.termWei globGram
+  putStrLn ">>> TERM WEI <<<"
+  forM_ (M.toList termWei) print
+  putStrLn "<<< TERM WEI >>>"
+  ----------------------------------
   xmlFiles <- getXmlFiles skladnicaDir
   stats <- flip E.execStateT emptyStats $ do
     forM_ xmlFiles $ \xmlFile -> do
@@ -480,7 +504,7 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
       sklForest <- liftIO $ forestFromXml skladnicaXML
       forM_ sklForest $ \sklTree -> do
         let gram = if restrictGrammar
-                      then buildGram M.empty $ Select.select
+                      then buildGram useFreqs $ Select.select
                              (S.fromList $ baseForms sklTree)
                              gramSet
                       else globGram
@@ -540,9 +564,9 @@ fullTest skladnicaDir walentyPath expansionPath = do
   putStrLn "\n===== PARSING TESTS =====\n"
   let conf = ParseConf
        { showTrees = Nothing -- Just 1
-       , restrictGrammar = False
+       , restrictGrammar = True
        , pickFile = 0.0
-       , useFreqs = False }
+       , useFreqs = freqMap extr } -- or Nothing
   parsingTest skladnicaDir extr "wypowiedzenie" conf
 
 
