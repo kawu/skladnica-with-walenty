@@ -22,6 +22,9 @@ import qualified Control.Monad.State.Strict    as E
 import           Control.Monad.Trans.Maybe     (MaybeT (..))
 import           Control.Monad.Morph           as Morph
 
+import qualified System.Random as Random
+
+import Data.PSQueue (Binding(..))
 import           Data.Either                   (lefts)
 import           Data.IORef
 import qualified Data.Map.Strict               as M
@@ -272,10 +275,12 @@ atomPlus x y = AtomStats
 
 
 printCatStats :: CatStats -> IO ()
-printCatStats catStats = forM_ (M.toList catStats) $ \(len, atom) -> do
-  putStr (show len)
-  putStr " => "
-  printAtomStats atom
+printCatStats catStats = do
+  putStrLn "length,nodes,edges,waitnodes,waitedges,number"
+  forM_ (M.toList catStats) $ \(len, atom) -> do
+    putStr (show len)
+    putStr ","
+    printAtomStats atom
 
 
 printStats :: Stats -> IO ()
@@ -325,28 +330,137 @@ updateOtherStatsFinal sentLen hype = E.modify' $ \st -> st
   { otherStatsFinal = updateCatStats sentLen hype (otherStatsFinal st) }
 
 
+printHypeStats hype = do
+  putStr "done nodes: " >> print (AStar.doneNodesNum hype)
+  putStr "done edges: " >> print (AStar.doneEdgesNum hype)
+  putStr "waiting nodes: " >> print (AStar.waitingNodesNum hype)
+  putStr "waiting edges: " >> print (AStar.waitingEdgesNum hype)
+
+
+-- parsingTest
+--   :: FilePath   -- ^ Skladnica directory
+--   -> Extract    -- ^ Extracted grammar
+--   -> Text       -- ^ Start symbol
+--   -> Double     -- ^ Chance to pick a non-MWE file to test
+--   -> Maybe Int  -- ^ How many trees to show?
+--   -> IO ()
+-- parsingTest skladnicaDir Extract{..} begSym pickFile showTrees = do
+--   let gram = buildGram gramSet
+-- --   let termWei = DAG.termWei gram
+-- --   putStrLn ">>> TERM WEI <<<"
+-- --   forM_ (M.toList termWei) print
+-- --   putStrLn "<<< TERM WEI >>>"
+--   xmlFiles <- getXmlFiles skladnicaDir
+--   stats <- flip E.execStateT emptyStats $ do
+--     forM_ xmlFiles $ \xmlFile -> do
+--       -- using `seq` to bypass the space-leak
+--       currStats <- E.get
+--       length (show currStats) `seq`
+--         considerAStar gram xmlFile
+--   printStats stats
+--   where
+--     considerAStar gram skladnicaXML = do
+--       i <- liftIO $ Random.randomRIO (0.0, 1.0)
+--       when (skladnicaXML `S.member` mweFiles || i <= pickFile) $ do
+--         parseAStar gram skladnicaXML
+--     parseAStar gram skladnicaXML = do
+--       let termMemo = Memo.wrap read show $ Memo.list Memo.char
+--           auto = AStar.mkAuto termMemo gram
+--           dag = DAG.dagGram gram
+--       liftIO $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
+--       sklForest <- liftIO $ forestFromXml skladnicaXML
+--       forM_ sklForest $ \sklTree -> do
+--         let sent = baseForms sklTree
+--             input = AStar.fromList sent
+--             -- below we make the AStar pipe work in the State monad
+--             -- transformer over IO (normally it works just over IO)
+--             pipe = Morph.hoist E.lift $ AStar.earleyAutoP auto input
+--             sentLen = length sent
+--             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
+--                    && AStar._dagID p == Left begSym
+--         contRef <- E.lift $ newIORef True
+--         hype <- runEffect . for pipe $ \(item, hype) -> void . runMaybeT $ do
+--           E.guard =<< liftIO (readIORef contRef)
+--           AStar.ItemP p <- return item
+--           E.guard (final p)
+--           liftIO $ putStrLn "<<CHECKPOINT>>" >> printHypeStats hype >> putStrLn ""
+--           if skladnicaXML `S.member` mweFiles
+--             then updateMweStatsCheck sentLen hype
+--             else updateOtherStatsCheck sentLen hype
+--           liftIO $ case showTrees of
+--               Nothing -> return ()
+--               Just k -> do
+--                 mapM_
+--                   (putStrLn . R.drawTree . fmap show . T.encode . Left)
+--                   (take k . nubOrd $ AStar.fromPassive p hype)
+--                 putStrLn "<<DERIVATIONS>>"
+--                 ds <- AStar.derivFromPassive p hype input
+--                 let ds' = map
+--                       (AStar.expandDeriv dag . AStar.deriv2tree)
+--                       (lefts $ S.toList ds)
+--                 mapM_
+--                   (putStrLn . R.drawTree . fmap show)
+--                   (take k ds')
+--           liftIO $ writeIORef contRef False
+--         liftIO $ putStrLn "<<FINISH>>" >> printHypeStats hype
+--         -- putStr "deriv num: " >> print (length ts)
+--         -- putStr "tree num: "  >> print (length $ nubOrd ts)  >> putStrLn ""
+--         if skladnicaXML `S.member` mweFiles
+--           then updateMweStatsFinal sentLen hype
+--           else updateOtherStatsFinal sentLen hype
+--         liftIO $ case showTrees of
+--           Nothing -> return ()
+--           Just k -> do
+--             let ts = AStar.parsedTrees hype begSym sentLen
+--             mapM_
+--               (putStrLn . R.drawTree . fmap show . T.encode . Left)
+--               (take k $ nubOrd ts)
+--             putStrLn "<<DERIVATIONS>>"
+--             ds <- AStar.derivTrees hype begSym input
+--             let ds' = map (AStar.expandDeriv dag . AStar.deriv2tree) (S.toList ds)
+--             mapM_
+--               (putStrLn . R.drawTree . fmap show)
+--               (take k ds')
+-- --     procPath dag skladnicaXML = do
+-- --       putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
+-- --       sklForest <- forestFromXml skladnicaXML
+-- --       forM_ sklForest $ \sklTree -> do
+-- --         putStr "Can recognize: "
+-- --         print =<< recognize dag (baseForms sklTree)
+
+
+data Result a
+  = None
+  | Some a
+  | Done
+  deriving (Show, Eq, Ord)
+
+
 parsingTest
   :: FilePath   -- ^ Skladnica directory
   -> Extract    -- ^ Extracted grammar
   -> Text       -- ^ Start symbol
+  -> Double     -- ^ Chance to pick a non-MWE file to test
   -> Maybe Int  -- ^ How many trees to show?
   -> IO ()
-parsingTest skladnicaDir Extract{..} begSym showTrees = do
+parsingTest skladnicaDir Extract{..} begSym pickFile showTrees = do
   let gram = buildGram gramSet
-      dag = DAG.dagGram gram
-      auto = AStar.mkAuto termMemo gram
---   let termWei = DAG.termWei gram
---   putStrLn ">>> TERM WEI <<<"
---   forM_ (M.toList termWei) print
---   putStrLn "<<< TERM WEI >>>"
   xmlFiles <- getXmlFiles skladnicaDir
   stats <- flip E.execStateT emptyStats $ do
-    forM_ xmlFiles (parseAStar dag auto)
+    forM_ xmlFiles $ \xmlFile -> do
+      -- using `seq` to bypass the space-leak
+      currStats <- E.get
+      length (show currStats) `seq`
+        considerAStar gram xmlFile
   printStats stats
   where
-    termMemo = Memo.wrap read show $ Memo.list Memo.char
-    -- parseAStar :: DAG.Gram Text Text -> AStar.Auto Text Text -> FilePath -> IO ()
-    parseAStar dag auto skladnicaXML = do
+    considerAStar gram skladnicaXML = do
+      i <- liftIO $ Random.randomRIO (0.0, 1.0)
+      when (skladnicaXML `S.member` mweFiles || i <= pickFile) $ do
+        parseAStar gram skladnicaXML
+    parseAStar gram skladnicaXML = do
+      let termMemo = Memo.wrap read show $ Memo.list Memo.char
+          auto = AStar.mkAuto termMemo gram
       liftIO $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
       sklForest <- liftIO $ forestFromXml skladnicaXML
       forM_ sklForest $ \sklTree -> do
@@ -358,60 +472,29 @@ parsingTest skladnicaDir Extract{..} begSym showTrees = do
             sentLen = length sent
             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                    && AStar._dagID p == Left begSym
-        contRef <- E.lift $ newIORef True
-        hype <- runEffect . for pipe $ \(item, hype) -> void . runMaybeT $ do
-          E.guard =<< liftIO (readIORef contRef)
-          AStar.ItemP p <- return item
-          E.guard (final p)
-          liftIO $ putStrLn "<<CHECKPOINT>>" >> printHypeStats hype >> putStrLn ""
-          if skladnicaXML `S.member` mweFiles
-            then updateMweStatsCheck sentLen hype
-            else updateOtherStatsCheck sentLen hype
-          liftIO $ case showTrees of
-              Nothing -> return ()
-              Just k -> do
-                mapM_
-                  (putStrLn . R.drawTree . fmap show . T.encode . Left)
-                  (take k . nubOrd $ AStar.fromPassive p hype)
-                putStrLn "<<DERIVATIONS>>"
-                ds <- AStar.derivFromPassive p hype input
-                let ds' = map
-                      (AStar.expandDeriv dag . AStar.deriv2tree)
-                      (lefts $ S.toList ds)
-                mapM_
-                  (putStrLn . R.drawTree . fmap show)
-                  (take k ds')
-          liftIO $ writeIORef contRef False
+        contRef <- E.lift $ newIORef None
+        hype <- runEffect . for pipe $ \(item :-> itemWeight, hype) -> void . runMaybeT $ do
+          cont <- liftIO (readIORef contRef)
+          case cont of
+            None -> do
+              AStar.ItemP p <- return item
+              E.guard (final p)
+              liftIO $ putStrLn "<<BEGIN>>" >> printHypeStats hype >> putStrLn ""
+              liftIO $ writeIORef contRef (Some $ getWeight itemWeight)
+            Some optimal -> do
+              -- waiting for the first time that the optimal weight is surpassed
+              E.guard $ getWeight itemWeight > optimal
+              liftIO $ putStrLn "<<CHECKPOINT>>" >> printHypeStats hype >> putStrLn ""
+              if skladnicaXML `S.member` mweFiles
+                then updateMweStatsCheck sentLen hype
+                else updateOtherStatsCheck sentLen hype
+              liftIO $ writeIORef contRef Done
+            Done -> return ()
         liftIO $ putStrLn "<<FINISH>>" >> printHypeStats hype
-        -- putStr "deriv num: " >> print (length ts)
-        -- putStr "tree num: "  >> print (length $ nubOrd ts)  >> putStrLn ""
         if skladnicaXML `S.member` mweFiles
           then updateMweStatsFinal sentLen hype
           else updateOtherStatsFinal sentLen hype
-        liftIO $ case showTrees of
-          Nothing -> return ()
-          Just k -> do
-            let ts = AStar.parsedTrees hype begSym sentLen
-            mapM_
-              (putStrLn . R.drawTree . fmap show . T.encode . Left)
-              (take k $ nubOrd ts)
-            putStrLn "<<DERIVATIONS>>"
-            ds <- AStar.derivTrees hype begSym input
-            let ds' = map (AStar.expandDeriv dag . AStar.deriv2tree) (S.toList ds)
-            mapM_
-              (putStrLn . R.drawTree . fmap show)
-              (take k ds')
-    printHypeStats hype = do
-      putStr "done nodes: " >> print (AStar.doneNodesNum hype)
-      putStr "done edges: " >> print (AStar.doneEdgesNum hype)
-      putStr "waiting nodes: " >> print (AStar.waitingNodesNum hype)
-      putStr "waiting edges: " >> print (AStar.waitingEdgesNum hype)
---     procPath dag skladnicaXML = do
---       putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
---       sklForest <- forestFromXml skladnicaXML
---       forM_ sklForest $ \sklTree -> do
---         putStr "Can recognize: "
---         print =<< recognize dag (baseForms sklTree)
+    getWeight e = AStar.priWeight e + AStar.estWeight e
 
 
 fullTest
@@ -428,7 +511,7 @@ fullTest skladnicaDir walentyPath expansionPath = do
   forM_ (S.toList $ gramSet extr) $
     putStrLn . R.drawTree . fmap show
   putStrLn "\n===== PARSING TESTS =====\n"
-  parsingTest skladnicaDir extr "wypowiedzenie" (Just 1)
+  parsingTest skladnicaDir extr "wypowiedzenie" 0.0 Nothing -- (Just 1)
 
 
 ------------------------------------------------------------------------------
