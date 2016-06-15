@@ -527,16 +527,14 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
           case showTrees of
             Nothing -> return ()
             Just _ -> liftIO $ do
-              -- Deriv.procAndPrint begSym input hypeModif
-              case item of
-                -- NOTE: if we enforce that p is final, no error occurs
-                -- AStar.ItemP p -> when (final p) $ mapM_
-                AStar.ItemP p -> mapM_
-                  -- (putStrLn . R.drawTree . fmap show)
-                  -- (Deriv.fromPassive p hype)
-                  (putStrLn . R.drawTree . fmap show . T.encode . Left)
-                  (AStar.fromPassive p hype)
-                _ -> return ()
+              Deriv.procAndPrint begSym input hypeModif
+--               case item of
+--                 AStar.ItemP p -> when (final p) $ mapM_
+--                   (putStrLn . R.drawTree . fmap show . Deriv.deriv4show)
+--                   (Deriv.fromPassive p hype)
+--                   -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
+--                   -- (AStar.fromPassive p hype)
+--                 _ -> return ()
           void . runMaybeT $ do
             cont <- liftIO (readIORef contRef)
             case cont of
@@ -562,6 +560,11 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
         if skladnicaXML `S.member` mweFiles
           then updateMweStatsFinal sentLen hype
           else updateOtherStatsFinal sentLen hype
+        case showTrees of
+          Nothing -> return ()
+          Just _ -> liftIO $ mapM_
+            (putStrLn . R.drawTree . fmap show . Deriv.deriv4show)
+            (Deriv.derivTrees hype begSym sentLen)
     getWeight e = AStar.priWeight e + AStar.estWeight e
 
 
