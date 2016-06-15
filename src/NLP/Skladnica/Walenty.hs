@@ -41,6 +41,7 @@ import qualified Pipes.Prelude                 as Pipes
 import qualified System.FilePath.Find          as F
 
 import qualified NLP.Partage.AStar             as AStar
+import qualified NLP.Partage.AStar.Deriv       as Deriv
 import qualified NLP.Partage.DAG               as DAG
 import qualified NLP.Partage.Earley            as Earley
 import qualified NLP.Partage.Tree.Other        as T
@@ -519,7 +520,23 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                    && AStar._dagID p == Left begSym
         contRef <- E.lift $ newIORef None
-        hype <- runEffect . for pipe $ \(item :-> itemWeight, hype) ->
+        hype <- runEffect . for pipe $ \hypeModif -> do
+          let item = AStar.modifItem hypeModif
+              itemWeight = AStar.modifTrav hypeModif
+              hype = AStar.modifHype hypeModif
+          case showTrees of
+            Nothing -> return ()
+            Just _ -> liftIO $ do
+              -- Deriv.procAndPrint begSym input hypeModif
+              case item of
+                -- NOTE: if we enforce that p is final, no error occurs
+                -- AStar.ItemP p -> when (final p) $ mapM_
+                AStar.ItemP p -> mapM_
+                  -- (putStrLn . R.drawTree . fmap show)
+                  -- (Deriv.fromPassive p hype)
+                  (putStrLn . R.drawTree . fmap show . T.encode . Left)
+                  (AStar.fromPassive p hype)
+                _ -> return ()
           void . runMaybeT $ do
             cont <- liftIO (readIORef contRef)
             case cont of
@@ -563,8 +580,8 @@ fullTest skladnicaDir walentyPath expansionPath = do
     putStrLn . R.drawTree . fmap show
   putStrLn "\n===== PARSING TESTS =====\n"
   let conf = ParseConf
-       { showTrees = Nothing -- Just 1
-       , restrictGrammar = True
+       { showTrees = Just 1 -- Nothing
+       , restrictGrammar = False
        , pickFile = 0.0
        , useFreqs = freqMap extr } -- or Nothing
   parsingTest skladnicaDir extr "wypowiedzenie" conf
