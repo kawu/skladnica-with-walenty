@@ -451,7 +451,7 @@ printHypeStats hype = do
 
 
 -- | A custom datatype which facilitates computing the size
--- of the "optimal" part of the hypergraph. 
+-- of the "optimal" part of the hypergraph.
 data Result a
   = None
   | Some a
@@ -513,28 +513,32 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
             auto = AStar.mkAuto termMemo gram
             sent = baseForms sklTree
             input = AStar.fromList sent
+            derivConf = Deriv.DerivR
+              { Deriv.startSym = begSym
+              , Deriv.sentLen = sentLen }
             -- below we make the AStar pipe work in the State monad
             -- transformer over IO (normally it works just over IO)
-            pipe = Morph.hoist E.lift $ AStar.earleyAutoP auto input
+            pipe = Morph.hoist E.lift
+              ( AStar.earleyAutoP auto input
+              >-> Deriv.derivsPipe derivConf )
             sentLen = length sent
             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                    && AStar._dagID p == Left begSym
         contRef <- E.lift $ newIORef None
-        hype <- runEffect . for pipe $ \hypeModif -> do
+        derivsOnlineRef <- E.lift $ newIORef (S.empty, 0 :: Int)
+        derivsFinalRef <- E.lift $ newIORef (S.empty, 0 :: Int)
+        hype <- runEffect . for pipe $ \(hypeModif, derivTrees) -> do
           let item = AStar.modifItem hypeModif
               itemWeight = AStar.modifTrav hypeModif
               hype = AStar.modifHype hypeModif
           case showTrees of
             Nothing -> return ()
-            Just _ -> liftIO $ do
-              Deriv.procAndPrint begSym input hypeModif
---               case item of
---                 AStar.ItemP p -> when (final p) $ mapM_
---                   (putStrLn . R.drawTree . fmap show . Deriv.deriv4show)
---                   (Deriv.fromPassive p hype)
---                   -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
---                   -- (AStar.fromPassive p hype)
---                 _ -> return ()
+            Just _ -> liftIO $ forM_ derivTrees $ \t -> do
+              putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
+              modifyIORef derivsOnlineRef $ \(s, n) -> (S.insert t s, n + 1)
+              return ()
+              -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
+              -- (AStar.fromPassive p hype)
           void . runMaybeT $ do
             cont <- liftIO (readIORef contRef)
             case cont of
@@ -562,9 +566,21 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
           else updateOtherStatsFinal sentLen hype
         case showTrees of
           Nothing -> return ()
-          Just _ -> liftIO $ mapM_
-            (putStrLn . R.drawTree . fmap show . Deriv.deriv4show)
-            (Deriv.derivTrees hype begSym sentLen)
+          Just _ -> liftIO $ do
+            let derivList = Deriv.derivTrees hype begSym sentLen
+            forM_ derivList $ \t -> do
+              putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
+              modifyIORef derivsFinalRef $ \(s, n) -> (S.insert t s, n + 1)
+            derivsOnline <- readIORef derivsOnlineRef
+            derivsFinal <- readIORef derivsFinalRef
+            liftIO . putStrLn $ "# of on-the-fly derived trees: "
+              ++ show (snd derivsOnline)
+            liftIO . putStrLn $ "# of distinct on-the-fly derived trees: "
+              ++ show (S.size $ fst derivsOnline)
+            liftIO . putStrLn $ "# of final derived trees: "
+              ++ show (snd derivsFinal)
+            liftIO . putStrLn $ "# of distinct final derived trees: "
+              ++ show (S.size $ fst derivsFinal)
     getWeight e = AStar.priWeight e + AStar.estWeight e
 
 
