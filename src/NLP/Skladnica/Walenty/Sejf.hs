@@ -7,22 +7,29 @@
 
 
 module NLP.Skladnica.Walenty.Sejf
-( readSejf
+( SejfEntry(..)
+, partition
+, querify
+-- * Parsing
+, readSejf
 , parseSejf
 , parseEntry
-, querify
 ) where
 
 import           Control.Arrow                (first)
 import           Control.Monad                (guard, msum)
 
-import qualified Data.Char as C
+import           Data.List                    (isInfixOf)
+import qualified Data.Char                    as C
 import           Data.Text                    (Text)
 import qualified Data.Text                    as T
 import qualified Data.Text.Lazy               as L
 import qualified Data.Text.Lazy.IO            as L
 
+import qualified NLP.Skladnica                as S
 import qualified NLP.Skladnica.Walenty.Search as E
+
+import Debug.Trace (trace)
 
 
 --------------------------------------------------------------------------------
@@ -50,23 +57,48 @@ data SejfEntry = SejfEntry
 -- and if every part of the `orth` form is present in terminal
 -- leaves.
 querify :: SejfEntry -> E.Expr E.SklTree
+-- querify SejfEntry{..} = E.andQ
+--   [ E.trunk (E.hasTag tag)
+--   , E.andQ
+--     [ E.ancestor (E.hasOrth form)
+--     | form <- partition orth ]
+--   ]
+--
+-- querify SejfEntry{..} = E.andQ
+--   [ E.trunk . E.hasOrths . partition $ orth
+--   , E.andQ
+--     [ E.ancestor (E.hasOrth form)
+--     | form <- partition orth ]
+--   ]
+--
 querify SejfEntry{..} = E.andQ
-  [ E.trunk (E.hasTag tag)
-  , E.andQ
-    [ E.ancestor (E.hasOrth form)
-    | form <- parts orth ]
+  [ E.trunk $ E.hasOrths orthForms
+  , E.IfThenElse checkLeaves markLeaves (E.B False)
   ]
+  where
+    orthForms = partition orth
+    leaves = map (L.toStrict . S.orth) . E.terminals
+    -- below, it is easier to use `Satisfy` to check that terminals occur in
+    -- appropriate order, but finally the leaves have to be marked as MWE
+    -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
+    -- function.
+    checkLeaves = E.Satisfy $ \t -> orthForms `isInfixOf` leaves t
+    markLeaves = E.andQ
+      [ E.ancestor (E.hasOrth form)
+      | form <- orthForms ]
 
 
 -- | Extract parts of the given textual form, using spaces and interpunction
 -- characters as separators, the latter being left in the resulting list.
-parts :: Text -> [Text]
-parts text
-  | T.null text = []
+partition :: Text -> [Text]
+partition text
+  | T.null right = [left]
   | headSat C.isSpace right =
-      left : parts (T.tail right)
-  | otherwise =
-      left : parts right
+      left : partition (T.tail right)
+  | headSat C.isPunctuation right =
+      left : T.singleton (T.head right) : partition (T.tail right)
+  | otherwise = error "partition: ???"
+      -- left : partition right
   where
     (left, right) = T.break (\c -> C.isSpace c || C.isPunctuation c) text
     headSat p t = case T.uncons t of

@@ -151,7 +151,14 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath = do
   walenty <- readWalenty walentyPath expansionPath
   putStr "Number of lexical entries: " >> print (length walenty)
   -- read SEJF dictionary
-  sejf <- Sejf.readSejf sejfPath
+  sejf0 <- Sejf.readSejf sejfPath
+  let sejf =
+        [ ( sejfEntry
+          , (S.fromList . Sejf.partition) (Sejf.orth sejfEntry) )
+        | sejfEntry <- sejf0 ]
+--   forM_ sejf $ \(entry, wordSet) -> do
+--     print entry
+--     print wordSet
   -- find all XML files
   xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
@@ -160,17 +167,29 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath = do
   where
     -- emptyExtract = Extract S.empty 0 0
     emptyExtract = Extract S.empty S.empty S.empty S.empty M.empty
-    procPath walenty sejf skladnicaXML = do
+    procPath walenty sejf0 skladnicaXML = do
       E.lift $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
       -- E.modify' $ \st -> st {seenNum = seenNum st + 1}
       E.modify' $ \st -> st {seenFiles = S.insert skladnicaXML (seenFiles st)}
       sklForest <- E.lift $ forestFromXml skladnicaXML
       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
       -- printExtracted dag
-      let exprs1 = map Q.querify walenty
+      let sentSet = case sklForest of
+            sklTree : _ -> S.fromList $
+              map (L.toStrict . S.orth) (Q.terminals sklTree)
+            _ -> S.empty
+          sejf =
+            [ entry
+            | (entry, wordSet) <- sejf0
+            , wordSet `S.isSubsetOf` sentSet ]
+          exprs1 = map Q.querify walenty
           exprs2 = map Sejf.querify sejf
+      E.lift $ putStrLn $ "Size of the sentSet: " ++ show (S.size sentSet)
+      E.lift $ putStrLn $ "Number of SEJF expressions: " ++ show (length sejf)
+      E.lift $ putStrLn $ "Relevant SEJF expressions: " ++ show sejf
       forM_ sklForest $ \sklTree -> do
         let mweTree = Q.markAll (exprs1 ++ exprs2) sklTree
+        -- let mweTree = Q.markAll exprs2 sklTree
             sklETs  = G.extractGrammar sklTree
             mweETs = G.extractGrammar mweTree
             est = sklETs `S.union` mweETs
@@ -535,15 +554,15 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
           let item = AStar.modifItem hypeModif
               itemWeight = AStar.modifTrav hypeModif
               hype = AStar.modifHype hypeModif
-          case showTrees of
-            Nothing -> return ()
-            Just _ -> liftIO $ do
-              -- putStrLn "<|New HyperModif|>"
-              forM_ derivTrees $ \t -> do
-                putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
-                -- modifyIORef derivsOnlineRef $ \(s, n) -> (S.insert t s, n + 1)
-                -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
-                -- (AStar.fromPassive p hype)
+--           case showTrees of
+--             Nothing -> return ()
+--             Just _ -> liftIO $ do
+--               -- putStrLn "<|New HyperModif|>"
+--               forM_ derivTrees $ \t -> do
+--                 putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
+--                 -- modifyIORef derivsOnlineRef $ \(s, n) -> (S.insert t s, n + 1)
+--                 -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
+--                 -- (AStar.fromPassive p hype)
           void . runMaybeT $ do
             cont <- liftIO (readIORef contRef)
             case cont of

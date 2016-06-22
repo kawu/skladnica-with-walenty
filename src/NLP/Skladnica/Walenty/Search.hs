@@ -20,11 +20,13 @@ module NLP.Skladnica.Walenty.Search
 
 -- * Primitives
 , andQ
+, anyChild
 , trunk
 , ancestor
 , hasBase
 , hasTag
 , hasOrth
+, hasOrths
 ) where
 
 
@@ -91,8 +93,10 @@ data Expr a where
     -> Expr a -- Then
     -> Expr a -- Else
     -> Expr a
-  -- Does the current node satisfy the given predicate?
-  Satisfy :: (S.Node -> Bool) -> Expr S.Node
+  -- Does the current node/tree satisfy the given predicate?
+  -- Be aware that if you use `Satisfy` over a tree to check some lexical
+  -- constraints, the corresponding lexical nodes will not be marked.
+  Satisfy :: (a -> Bool) -> Expr a
   -- A predicate which has to be satisfied by the parent node
   -- and the current node at the same time (useful for agreement
   -- constraints)
@@ -108,7 +112,8 @@ data Expr a where
   -- relation can be checked.
   Child :: (S.IsHead -> Bool) -> Expr SklTree -> Expr SklTree
   -- Like `Child` but doesn't update the parent node
-  -- (useful for agreement constraints)
+  -- (useful e.g. for agreement constraints)
+  -- TODO: `Child` and `SkipChild` could be represented by one constructor
   SkipChild :: (S.IsHead -> Bool) -> Expr SklTree -> Expr SklTree
   -- Check that the tree is non-branching
   NonBranching :: Expr SklTree
@@ -367,14 +372,19 @@ hasBase :: Text -> Expr S.Node
 hasBase x = hasBases [x]
 
 
--- | Check if the node is a terminal node with the given tag value.
-hasTag :: Text -> Expr S.Node
-hasTag x = isTerm $ \S.Term{..} -> tag == L.fromStrict x
+-- | Check if the node is a terminal node with one of the given orth values.
+hasOrths :: [Text] -> Expr S.Node
+hasOrths xs = isTerm $ \S.Term{..} -> orth `elem` map L.fromStrict xs
 
 
 -- | Check if the node is a terminal node with the given orth value.
 hasOrth :: Text -> Expr S.Node
-hasOrth x = isTerm $ \S.Term{..} -> orth == L.fromStrict x
+hasOrth x = hasOrths [x]
+
+
+-- | Check if the node is a terminal node with the given tag value.
+hasTag :: Text -> Expr S.Node
+hasTag x = isTerm $ \S.Term{..} -> tag == L.fromStrict x
 
 
 isNonTerm :: (S.NonTerm -> Bool) -> Expr S.Node
@@ -461,7 +471,7 @@ evaluate (IfThenElse b e1 e2) t = do
   if r
     then evaluate e1 t
     else evaluate e2 t
-evaluate (Satisfy p) node = return (p node)
+evaluate (Satisfy p) x = return (p x)
 evaluate (Current e) t = evaluate e (S.rootLabel t)
 evaluate (Child p e) t = withParent t $ evaluate (SkipChild p e) t
 --   or <$> sequence
