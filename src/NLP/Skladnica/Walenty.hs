@@ -10,8 +10,7 @@
 
 
 module NLP.Skladnica.Walenty
-( runTest
-, extractGrammar
+( extractGrammar
 , parsingTest
 , fullTest
 ) where
@@ -53,6 +52,7 @@ import qualified NLP.Skladnica.Walenty.Grammar as G
 import qualified NLP.Skladnica.Walenty.Prune   as P
 import qualified NLP.Skladnica.Walenty.Search  as Q
 import qualified NLP.Skladnica.Walenty.Select  as Select
+import qualified NLP.Skladnica.Walenty.Sejf    as Sejf
 
 
 ------------------------------------------------------------------------------
@@ -66,45 +66,45 @@ getXmlFiles dir = do
   F.find F.always (F.fileName F.~~? "*.xml") dir
 
 
--- | Read all verb entries from Walenty and search for them
--- in Skladnica treebank.
-runTest
-  :: FilePath -- ^ Skladnica directory
-  -> FilePath -- ^ Walenty file
-  -> FilePath -- ^ Walenty Expansion file
-  -> IO ()
-runTest skladnicaDir walentyPath expansionPath = do
-  -- read *lexicalized* verbal entries from Walenty
-  walenty <- readWalenty walentyPath expansionPath
-  putStr "Number of lexical entries: " >> print (length walenty)
-  -- find all XML files
-  xmlFiles <- getXmlFiles skladnicaDir
-  -- per each XML file...
-  forM_ xmlFiles $ \skladnicaXML -> do
-    putStrLn skladnicaXML
-    sklForest <- forestFromXml skladnicaXML
-    forM_ sklForest $ \sklTree -> do
-      -- putStrLn $ showTree sklTree
-      -- procVerbs sklTree walenty
-      forM_ walenty (procVerb sklTree)
-  where
-    simpLab = L.unpack . either S.cat S.orth . S.label
-    procVerb sklTree verb = do
-      -- print verb
-      -- putStrLn ""
-      let expr = Q.querify verb
-          mweTrees = Q.markNodes expr sklTree
-      when (not $ null mweTrees) $ do
-        putStrLn "" >> print verb >> putStrLn ""
-        -- putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
-        forM_ mweTrees $ \mweTree -> do
-          putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ mweTree
-    procVerbs sklTree verbs = do
-      let exprs = map Q.querify verbs
-          sklTree' = Q.markAll exprs sklTree
-      when (sklTree /= sklTree') $ do
-        putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ sklTree
-        putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ sklTree'
+-- -- | Read all verb entries from Walenty and search for them
+-- -- in Skladnica treebank.
+-- runTest
+--   :: FilePath -- ^ Skladnica directory
+--   -> FilePath -- ^ Walenty file
+--   -> FilePath -- ^ Walenty Expansion file
+--   -> IO ()
+-- runTest skladnicaDir walentyPath expansionPath = do
+--   -- read *lexicalized* verbal entries from Walenty
+--   walenty <- readWalenty walentyPath expansionPath
+--   putStr "Number of lexical entries: " >> print (length walenty)
+--   -- find all XML files
+--   xmlFiles <- getXmlFiles skladnicaDir
+--   -- per each XML file...
+--   forM_ xmlFiles $ \skladnicaXML -> do
+--     putStrLn skladnicaXML
+--     sklForest <- forestFromXml skladnicaXML
+--     forM_ sklForest $ \sklTree -> do
+--       -- putStrLn $ showTree sklTree
+--       -- procVerbs sklTree walenty
+--       forM_ walenty (procVerb sklTree)
+--   where
+--     simpLab = L.unpack . either S.cat S.orth . S.label
+--     procVerb sklTree verb = do
+--       -- print verb
+--       -- putStrLn ""
+--       let expr = Q.querify verb
+--           mweTrees = Q.markNodes expr sklTree
+--       when (not $ null mweTrees) $ do
+--         putStrLn "" >> print verb >> putStrLn ""
+--         -- putStrLn . R.drawForest . map (fmap simpLab . S.simplify) $ mweTrees
+--         forM_ mweTrees $ \mweTree -> do
+--           putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ mweTree
+--     procVerbs sklTree verbs = do
+--       let exprs = map Q.querify verbs
+--           sklTree' = Q.markAll exprs sklTree
+--       when (sklTree /= sklTree') $ do
+--         putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ sklTree
+--         putStrLn . S.drawTree . S.mapFst simpLab . fmap show $ sklTree'
 
 
 ------------------------------------------------------------------------------
@@ -144,29 +144,33 @@ extractGrammar
   :: FilePath -- ^ Skladnica directory
   -> FilePath -- ^ Walenty file
   -> FilePath -- ^ Walenty expansion file
+  -> FilePath -- ^ SEJF file
   -> IO Extract
-extractGrammar skladnicaDir walentyPath expansionPath = do
+extractGrammar skladnicaDir walentyPath expansionPath sejfPath = do
   -- read *lexicalized* verbal entries from Walenty
   walenty <- readWalenty walentyPath expansionPath
   putStr "Number of lexical entries: " >> print (length walenty)
+  -- read SEJF dictionary
+  sejf <- Sejf.readSejf sejfPath
   -- find all XML files
   xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
   flip E.execStateT emptyExtract $ do
-    forM_ xmlFiles (procPath walenty)
+    forM_ xmlFiles (procPath walenty sejf)
   where
     -- emptyExtract = Extract S.empty 0 0
     emptyExtract = Extract S.empty S.empty S.empty S.empty M.empty
-    procPath walenty skladnicaXML = do
+    procPath walenty sejf skladnicaXML = do
       E.lift $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
       -- E.modify' $ \st -> st {seenNum = seenNum st + 1}
       E.modify' $ \st -> st {seenFiles = S.insert skladnicaXML (seenFiles st)}
       sklForest <- E.lift $ forestFromXml skladnicaXML
       -- putStrLn "" >> putStrLn "# EXTRACTED:" >> putStrLn ""
       -- printExtracted dag
-      let exprs = map Q.querify walenty
+      let exprs1 = map Q.querify walenty
+          exprs2 = map Sejf.querify sejf
       forM_ sklForest $ \sklTree -> do
-        let mweTree = Q.markAll exprs sklTree
+        let mweTree = Q.markAll (exprs1 ++ exprs2) sklTree
             sklETs  = G.extractGrammar sklTree
             mweETs = G.extractGrammar mweTree
             est = sklETs `S.union` mweETs
@@ -591,10 +595,11 @@ fullTest
   :: FilePath -- ^ Skladnica directory
   -> FilePath -- ^ Walenty file
   -> FilePath -- ^ Walenty expansion file
+  -> FilePath -- ^ SEJF file
   -> IO ()
-fullTest skladnicaDir walentyPath expansionPath = do
+fullTest skladnicaDir walentyPath expansionPath sejfPath = do
   putStrLn "\n===== GRAMMAR EXTRACTION =====\n"
-  extr <- extractGrammar skladnicaDir walentyPath expansionPath
+  extr <- extractGrammar skladnicaDir walentyPath expansionPath sejfPath
   putStrLn "\n===== EXTRACTED GRAMMAR =====\n"
   showExtract extr
   putStrLn ""

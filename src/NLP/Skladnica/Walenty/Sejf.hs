@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 
 -- | A module responsible for parsing the SEJF dictionary
@@ -9,16 +10,19 @@ module NLP.Skladnica.Walenty.Sejf
 ( readSejf
 , parseSejf
 , parseEntry
+, querify
 ) where
 
-import           Control.Arrow     (first)
-import           Control.Monad     (guard, msum)
+import           Control.Arrow                (first)
+import           Control.Monad                (guard, msum)
 
-import           Data.Text         (Text)
-import qualified Data.Text         as T
-import qualified Data.Text.Lazy    as L
-import qualified Data.Text.Lazy.IO as L
+import qualified Data.Char as C
+import           Data.Text                    (Text)
+import qualified Data.Text                    as T
+import qualified Data.Text.Lazy               as L
+import qualified Data.Text.Lazy.IO            as L
 
+import qualified NLP.Skladnica.Walenty.Search as E
 
 
 --------------------------------------------------------------------------------
@@ -35,6 +39,39 @@ data SejfEntry = SejfEntry
   , tag  :: Text
     -- ^ Morphosyntactic tag
   } deriving (Show, Eq, Ord)
+
+
+--------------------------------------------------------------------------------
+-- Entry Convertion
+--------------------------------------------------------------------------------
+
+
+-- | Check if the head terminal has the corresponding tag
+-- and if every part of the `orth` form is present in terminal
+-- leaves.
+querify :: SejfEntry -> E.Expr E.SklTree
+querify SejfEntry{..} = E.andQ
+  [ E.trunk (E.hasTag tag)
+  , E.andQ
+    [ E.ancestor (E.hasOrth form)
+    | form <- parts orth ]
+  ]
+
+
+-- | Extract parts of the given textual form, using spaces and interpunction
+-- characters as separators, the latter being left in the resulting list.
+parts :: Text -> [Text]
+parts text
+  | T.null text = []
+  | headSat C.isSpace right =
+      left : parts (T.tail right)
+  | otherwise =
+      left : parts right
+  where
+    (left, right) = T.break (\c -> C.isSpace c || C.isPunctuation c) text
+    headSat p t = case T.uncons t of
+      Just (x, _) -> p x
+      Nothing -> False
 
 
 --------------------------------------------------------------------------------

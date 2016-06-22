@@ -17,6 +17,14 @@ module NLP.Skladnica.Walenty.Search
 , markNodes
 , markOne
 , markAll
+
+-- * Primitives
+, andQ
+, trunk
+, ancestor
+, hasBase
+, hasTag
+, hasOrth
 ) where
 
 
@@ -106,14 +114,21 @@ data Expr a where
   NonBranching :: Expr SklTree
 
 
--- | Build a complex `ancestor` tree expression.
--- Note that the resulting expression is infinite...
--- Note that we consider the tree itself as its ancestor.
+-- -- | Build a complex `ancestor` tree expression.
+-- -- Note that the resulting expression is infinite...
+-- -- Note that we consider the tree itself as its ancestor.
+-- ancestor
+--   :: Expr SklTree -- ^ A tree expression to be satisfied by the ancestor.
+--   -> Expr SklTree
+-- -- ancestor e = anyChild (Or e (ancestor e))
+-- ancestor e = Or e (anyChild (ancestor e))
+
+
+-- | Similar to `trunk` but doesn't require the node to be on the trunk.
 ancestor
-  :: Expr SklTree -- ^ A tree expression to be satisfied by the ancestor.
+  :: Expr S.Node
   -> Expr SklTree
--- ancestor e = anyChild (Or e (ancestor e))
-ancestor e = Or e (anyChild (ancestor e))
+ancestor e = Or (Current e) (anyChild (ancestor e))
 
 
 -- | Check if one of the nodes present on the trunk
@@ -350,6 +365,16 @@ hasBases xs = isTerm $ \S.Term{..} -> base `elem` map L.fromStrict xs
 hasBase :: Text -> Expr S.Node
 -- hasBase x = isTerm $ \S.Term{..} -> L.fromStrict x == base
 hasBase x = hasBases [x]
+
+
+-- | Check if the node is a terminal node with the given tag value.
+hasTag :: Text -> Expr S.Node
+hasTag x = isTerm $ \S.Term{..} -> tag == L.fromStrict x
+
+
+-- | Check if the node is a terminal node with the given orth value.
+hasOrth :: Text -> Expr S.Node
+hasOrth x = isTerm $ \S.Term{..} -> orth == L.fromStrict x
 
 
 isNonTerm :: (S.NonTerm -> Bool) -> Expr S.Node
