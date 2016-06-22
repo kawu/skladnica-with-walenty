@@ -42,6 +42,7 @@ library
       , NLP.Skladnica.Walenty.Prune
       , NLP.Skladnica.Walenty.Grammar
       , NLP.Skladnica.Walenty.Select
+      , NLP.Skladnica.Walenty.Sejf
 
     ghc-options: -Wall
 
