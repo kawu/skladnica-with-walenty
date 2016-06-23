@@ -6,10 +6,10 @@ module NLP.Skladnica.Walenty.Select
 ) where
 
 
-import           Data.Text.Lazy                (Text)
-import qualified Data.Set as S
+import qualified Data.Set                      as S
+import           Data.Text                     (Text)
 
-import qualified NLP.Partage.Tree.Other       as O
+import qualified NLP.Partage.Tree.Other        as O
 
 import qualified NLP.Skladnica.Walenty.Grammar as G
 
@@ -22,5 +22,5 @@ select
   -> S.Set G.ET -- ^ Restricted grammar
 select sentSet gram = S.fromList
   [ tree | tree <- S.toList gram
-  , terminalSet tree `S.isSubsetOf` sentSet ]  
+  , terminalSet tree `S.isSubsetOf` sentSet ]
   where terminalSet = S.fromList . O.project

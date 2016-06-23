@@ -26,7 +26,7 @@ module NLP.Skladnica.Walenty.Search
 , hasBase
 , hasTag
 , hasOrth
-, hasOrths
+-- , hasOrths
 ) where
 
 
@@ -36,12 +36,12 @@ import           Control.Monad             (guard)
 import qualified Control.Monad.Reader      as E
 import           Control.Monad.Trans.Maybe (MaybeT (..), mapMaybeT)
 
-import           Data.Foldable             (foldMap)
+-- import           Data.Foldable             (foldMap)
 import           Data.List                 (foldl')
 import qualified Data.Map.Strict           as M
 import           Data.Maybe                (catMaybes, fromMaybe, isJust)
 import           Data.Text                 (Text)
-import qualified Data.Text.Lazy            as L
+-- import qualified Data.Text.Lazy            as L
 
 import qualified NLP.Skladnica             as S
 import qualified NLP.Walenty.Types         as W
@@ -363,28 +363,32 @@ agreeNumQ agreeNum = case agreeNum of
 
 -- | Check if the node is a terminal node with one of the given base values.
 hasBases :: [Text] -> Expr S.Node
-hasBases xs = isTerm $ \S.Term{..} -> base `elem` map L.fromStrict xs
+hasBases xs = isTerm $ \S.Term{..} -> base `elem` xs
 
 
 -- | Check if the node is a terminal node with the given base.
 hasBase :: Text -> Expr S.Node
--- hasBase x = isTerm $ \S.Term{..} -> L.fromStrict x == base
 hasBase x = hasBases [x]
 
 
 -- | Check if the node is a terminal node with one of the given orth values.
-hasOrths :: [Text] -> Expr S.Node
-hasOrths xs = isTerm $ \S.Term{..} -> orth `elem` map L.fromStrict xs
+hasOrth :: (Text -> Bool) -> Expr S.Node
+hasOrth p = isTerm $ \S.Term{..} -> p orth
 
 
--- | Check if the node is a terminal node with the given orth value.
-hasOrth :: Text -> Expr S.Node
-hasOrth x = hasOrths [x]
+-- -- | Check if the node is a terminal node with one of the given orth values.
+-- hasOrths :: [Text] -> Expr S.Node
+-- hasOrths xs = hasOrth (`elem` xs)
+
+
+-- -- | Check if the node is a terminal node with the given orth value.
+-- hasOrth :: Text -> Expr S.Node
+-- hasOrth x = hasOrths [x]
 
 
 -- | Check if the node is a terminal node with the given tag value.
 hasTag :: Text -> Expr S.Node
-hasTag x = isTerm $ \S.Term{..} -> tag == L.fromStrict x
+hasTag x = isTerm $ \S.Term{..} -> tag == x
 
 
 isNonTerm :: (S.NonTerm -> Bool) -> Expr S.Node
@@ -401,21 +405,21 @@ isTerm p = Satisfy $ \S.Node{..} -> isJust $ do
 
 -- | Check if the node is a non-terminal node with the given category.
 hasCat :: Text -> Expr S.Node
-hasCat x = isNonTerm $ \S.NonTerm{..} -> L.fromStrict x == cat
+hasCat x = isNonTerm $ \S.NonTerm{..} -> x == cat
 
 
 -- | Check if the node is a non-terminal node with the given attribute
 -- and the corresponding value.
 hasAttr :: Attr -> AttrVal -> Expr S.Node
 hasAttr x y = isNonTerm $ \S.NonTerm{..} -> isJust $ do
-  y' <- M.lookup (L.fromStrict x) morph
-  guard $ L.fromStrict y == y'
+  y' <- M.lookup x morph
+  guard $ y == y'
 
 
 getAttr :: Attr -> S.Node -> Maybe AttrVal
 getAttr x S.Node{..} = do
   S.NonTerm{..} <- takeLeft label
-  L.toStrict <$> M.lookup (L.fromStrict x) morph
+  M.lookup x morph
 
 
 --------------------------------------------------------------------------------

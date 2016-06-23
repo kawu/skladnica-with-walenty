@@ -30,8 +30,9 @@ import qualified Data.Map.Strict               as M
 import           Data.Maybe                    (mapMaybe)
 import qualified Data.MemoCombinators          as Memo
 import qualified Data.Set                      as S
-import           Data.Text.Lazy                (Text)
+import           Data.Text                     (Text)
 import qualified Data.Text.Lazy                as L
+import qualified Data.Text                     as TS
 import           Data.Tree                     as R
 
 import           Pipes
@@ -53,6 +54,7 @@ import qualified NLP.Skladnica.Walenty.Prune   as P
 import qualified NLP.Skladnica.Walenty.Search  as Q
 import qualified NLP.Skladnica.Walenty.Select  as Select
 import qualified NLP.Skladnica.Walenty.Sejf    as Sejf
+import qualified NLP.Skladnica.Walenty.NcpNEs  as NE
 
 
 ------------------------------------------------------------------------------
@@ -145,29 +147,30 @@ extractGrammar
   -> FilePath -- ^ Walenty file
   -> FilePath -- ^ Walenty expansion file
   -> FilePath -- ^ SEJF file
+  -> FilePath -- ^ NCP directory (for NEs)
   -> IO Extract
-extractGrammar skladnicaDir walentyPath expansionPath sejfPath = do
+extractGrammar skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   -- read *lexicalized* verbal entries from Walenty
   walenty <- readWalenty walentyPath expansionPath
   putStr "Number of lexical entries: " >> print (length walenty)
   -- read SEJF dictionary
   sejf0 <- Sejf.readSejf sejfPath
-  let sejf =
-        [ ( sejfEntry
-          , (S.fromList . Sejf.partition) (Sejf.orth sejfEntry) )
-        | sejfEntry <- sejf0 ]
---   forM_ sejf $ \(entry, wordSet) -> do
---     print entry
---     print wordSet
+  let sejf = sejfPartition Sejf.orth sejf0
+  -- read NCP-NEs dictionary
+  nes0 <- nubOrd <$> NE.nesInCorpus ncpPath
+  let nes = sejfPartition id nes0
+  putStrLn $ "===== NEs ===== "
+  forM_ nes $ \ne -> print ne
+  putStrLn $ "===== NEs END ===== "
   -- find all XML files
   xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
   flip E.execStateT emptyExtract $ do
-    forM_ xmlFiles (procPath walenty sejf)
+    forM_ xmlFiles (procPath walenty sejf nes)
   where
     -- emptyExtract = Extract S.empty 0 0
     emptyExtract = Extract S.empty S.empty S.empty S.empty M.empty
-    procPath walenty sejf0 skladnicaXML = do
+    procPath walenty sejf0 nes0 skladnicaXML = do
       E.lift $ putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
       -- E.modify' $ \st -> st {seenNum = seenNum st + 1}
       E.modify' $ \st -> st {seenFiles = S.insert skladnicaXML (seenFiles st)}
@@ -176,19 +179,24 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath = do
       -- printExtracted dag
       let sentSet = case sklForest of
             sklTree : _ -> S.fromList $
-              map (L.toStrict . S.orth) (Q.terminals sklTree)
+              map S.orth (Q.terminals sklTree)
             _ -> S.empty
           sejf =
             [ entry
             | (entry, wordSet) <- sejf0
             , wordSet `S.isSubsetOf` sentSet ]
+          nes =
+            [ entry
+            | (entry, wordSet) <- nes0
+            , wordSet `S.isSubsetOf` sentSet ]
           exprs1 = map Q.querify walenty
-          exprs2 = map Sejf.querify sejf
+          exprs2 = map (Sejf.querify Sejf.IgnoreCase) sejf
+          exprs3 = map (Sejf.querifyOrth Sejf.CaseSensitive) nes
       E.lift $ putStrLn $ "Size of the sentSet: " ++ show (S.size sentSet)
-      E.lift $ putStrLn $ "Number of SEJF expressions: " ++ show (length sejf)
       E.lift $ putStrLn $ "Relevant SEJF expressions: " ++ show sejf
+      E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
-        let mweTree = Q.markAll (exprs1 ++ exprs2) sklTree
+        let mweTree = Q.markAll (exprs1 ++ exprs2 ++ exprs3) sklTree
         -- let mweTree = Q.markAll exprs2 sklTree
             sklETs  = G.extractGrammar sklTree
             mweETs = G.extractGrammar mweTree
@@ -256,6 +264,18 @@ baseForms = map S.base . Q.terminals
 -- | Count elements in the input list.
 count :: Ord a => [a] -> M.Map a Int
 count = M.fromListWith (+) . map (,1)
+
+
+-- | Use `Sejf.partition` to determine component words and put them (under the
+-- form of a set) on the second position of the corresponding list elements.
+-- Preserve only these entries which have more than one component words.
+sejfPartition :: (a -> Text) -> [a] -> [(a, S.Set Text)]
+-- sejfPartition f = map $ \x -> (x, S.fromList . Sejf.partition . f $ x)
+sejfPartition f xs =
+  [ (x, wordSet)
+  | x <- xs
+  , let wordSet = S.fromList . Sejf.partition . f $ x
+  , S.size wordSet > 1 ]
 
 
 ------------------------------------------------------------------------------
@@ -615,10 +635,11 @@ fullTest
   -> FilePath -- ^ Walenty file
   -> FilePath -- ^ Walenty expansion file
   -> FilePath -- ^ SEJF file
+  -> FilePath -- ^ NCP directory
   -> IO ()
-fullTest skladnicaDir walentyPath expansionPath sejfPath = do
+fullTest skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   putStrLn "\n===== GRAMMAR EXTRACTION =====\n"
-  extr <- extractGrammar skladnicaDir walentyPath expansionPath sejfPath
+  extr <- extractGrammar skladnicaDir walentyPath expansionPath sejfPath ncpPath
   putStrLn "\n===== EXTRACTED GRAMMAR =====\n"
   showExtract extr
   putStrLn ""
@@ -627,7 +648,7 @@ fullTest skladnicaDir walentyPath expansionPath sejfPath = do
   putStrLn "\n===== PARSING TESTS =====\n"
   let conf = ParseConf
        { showTrees = Just 1 -- Nothing
-       , restrictGrammar = False
+       , restrictGrammar = True
        , pickFile = 0.0
        , useFreqs = freqMap extr } -- or Nothing
   parsingTest skladnicaDir extr "wypowiedzenie" conf

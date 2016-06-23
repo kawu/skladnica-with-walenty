@@ -9,11 +9,14 @@ packages:
 - './skladnica'
 - './walenty'
 - './partage'
+- './nkjp'
+- '../data-named'  # TODO: to be moved later to extra deps?
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
-  - polysoup-0.6.2          # Required by `skladnica` 
+  - polysoup-0.6.2          # Required by `skladnica` and `nkjp`
   - data-partition-0.3.0.0  # Required by `partage`
+  - lazy-io-0.1.0           # Required by `nkjp`
   - skladnica-0.1.0.0
   - walenty-0.1.0.0
 

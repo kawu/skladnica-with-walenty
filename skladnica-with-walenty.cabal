@@ -35,6 +35,8 @@ library
       , PSQueue             >= 1.1      && < 1.2
       , mmorph              >= 1.0      && < 1.1
       , random              >= 1.1      && < 1.2
+      , nkjp                >= 0.5      && < 0.6
+      , data-named          >= 0.6      && < 0.7
 
     exposed-modules:
         NLP.Skladnica.Walenty
@@ -43,6 +45,7 @@ library
       , NLP.Skladnica.Walenty.Grammar
       , NLP.Skladnica.Walenty.Select
       , NLP.Skladnica.Walenty.Sejf
+      , NLP.Skladnica.Walenty.NcpNEs
 
     ghc-options: -Wall
 

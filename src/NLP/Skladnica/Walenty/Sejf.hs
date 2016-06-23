@@ -8,8 +8,10 @@
 
 module NLP.Skladnica.Walenty.Sejf
 ( SejfEntry(..)
+, CaseSensitivity (..)
 , partition
 , querify
+, querifyOrth
 -- * Parsing
 , readSejf
 , parseSejf
@@ -53,10 +55,21 @@ data SejfEntry = SejfEntry
 --------------------------------------------------------------------------------
 
 
+-- | Should the comparison be case sensitive or should the case be ignored?
+data CaseSensitivity
+  = CaseSensitive
+  | IgnoreCase
+
+
 -- | Check if the head terminal has the corresponding tag
 -- and if every part of the `orth` form is present in terminal
 -- leaves.
-querify :: SejfEntry -> E.Expr E.SklTree
+querify
+  :: CaseSensitivity
+     -- ^ Regarding the comparison of the orthographic form
+  -> SejfEntry
+  -> E.Expr E.SklTree
+querify caseSens = querifyOrth caseSens . orth
 -- querify SejfEntry{..} = E.andQ
 --   [ E.trunk (E.hasTag tag)
 --   , E.andQ
@@ -64,43 +77,77 @@ querify :: SejfEntry -> E.Expr E.SklTree
 --     | form <- partition orth ]
 --   ]
 --
--- querify SejfEntry{..} = E.andQ
---   [ E.trunk . E.hasOrths . partition $ orth
---   , E.andQ
---     [ E.ancestor (E.hasOrth form)
---     | form <- partition orth ]
+
+
+-- -- | Generalized querify based on the orthographic form only.
+-- querifyOrth :: Text -> E.Expr E.SklTree
+-- querifyOrth orth = E.andQ
+--   [ E.trunk $ E.hasOrths orthForms
+--   , E.IfThenElse checkLeaves markLeaves (E.B False)
 --   ]
---
-querify SejfEntry{..} = E.andQ
-  [ E.trunk $ E.hasOrths orthForms
-  , E.IfThenElse checkLeaves markLeaves (E.B False)
-  ]
+--   where
+--     orthForms = partition orth
+--     -- leaves = map (L.toStrict . S.orth) . E.terminals
+--     leaves = map S.orth . E.terminals
+--     -- below, it is easier to use `Satisfy` to check that terminals occur in
+--     -- appropriate order, but finally the leaves have to be marked as MWE
+--     -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
+--     -- function.
+--     checkLeaves = E.Satisfy $ \t -> orthForms `isInfixOf` leaves t
+--     markLeaves = E.andQ
+--       [ E.ancestor (E.hasOrth form)
+--       | form <- orthForms ]
+
+
+-- | Generalized querify based on the orthographic form only.
+-- This version checks the condition that all components are in leaves (in the
+-- appriorate order) and that this condition is *not* satisfied for any of the
+-- children subtrees.
+querifyOrth :: CaseSensitivity -> Text -> E.Expr E.SklTree
+querifyOrth caseSens orth =
+  E.IfThenElse checkLeaves markLeaves (E.B False)
   where
-    orthForms = partition orth
-    leaves = map (L.toStrict . S.orth) . E.terminals
-    -- below, it is easier to use `Satisfy` to check that terminals occur in
+    -- it is easier to use `Satisfy` to check that terminals occur in
     -- appropriate order, but finally the leaves have to be marked as MWE
     -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
     -- function.
-    checkLeaves = E.Satisfy $ \t -> orthForms `isInfixOf` leaves t
+    checkLeaves = E.Satisfy $ \t ->
+      orthInLeaves t &&
+      (not.or) [orthInLeaves s | s <- children t]
+      where
+        children = map fst . S.subForest
+        orthInLeaves t =
+          map withCase (partition orth)
+          `isInfixOf`
+          map withCase (leaves t)
+        leaves = map S.orth . E.terminals
+    -- TODO: note that `markLeaves` can mark more than identified with
+    -- `checkLeaves`!
     markLeaves = E.andQ
-      [ E.ancestor (E.hasOrth form)
-      | form <- orthForms ]
+      [ E.ancestor . E.hasOrth $ \word ->
+          withCase word == withCase form
+      | form <- partition orth ]
+    -- take into account case sensitivity
+    withCase = case caseSens of
+      CaseSensitive -> id
+      IgnoreCase -> T.toLower
 
 
 -- | Extract parts of the given textual form, using spaces and interpunction
 -- characters as separators, the latter being left in the resulting list.
 partition :: Text -> [Text]
-partition text
-  | T.null right = [left]
-  | headSat C.isSpace right =
-      left : partition (T.tail right)
-  | headSat C.isPunctuation right =
-      left : T.singleton (T.head right) : partition (T.tail right)
-  | otherwise = error "partition: ???"
-      -- left : partition right
+partition =
+  filter (not . T.null) . go
   where
-    (left, right) = T.break (\c -> C.isSpace c || C.isPunctuation c) text
+    go text
+      | T.null right = [left]
+      | headSat C.isSpace right =
+          left : go (T.tail right)
+      | headSat C.isPunctuation right =
+          left : T.singleton (T.head right) : go (T.tail right)
+      | otherwise = error "go: ???"
+      where
+        (left, right) = T.break (\c -> C.isSpace c || C.isPunctuation c) text
     headSat p t = case T.uncons t of
       Just (x, _) -> p x
       Nothing -> False

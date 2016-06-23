@@ -21,7 +21,7 @@ import qualified Control.Monad.State.Strict   as E
 import qualified Data.Map.Strict              as M
 import           Data.Maybe                   (isJust)
 import qualified Data.Set                     as S
-import           Data.Text.Lazy               (Text)
+import           Data.Text                    (Text)
 import qualified Data.Tree                    as R
 
 -- NLP.Partage.DAG: for Ord R.Tree instance
