@@ -80,7 +80,7 @@ querify caseSens = querifyOrth caseSens . orth
 
 
 -- | Generalized querify based on the orthographic form only.
-querifyOrth :: CaseSensitive -> Text -> E.Expr E.SklTree
+querifyOrth :: CaseSensitivity -> Text -> E.Expr E.SklTree
 querifyOrth caseSens orth = E.andQ
   [ checkTrunk
   , E.IfThenElse checkLeaves markLeaves (E.B False)
