@@ -79,58 +79,71 @@ querify caseSens = querifyOrth caseSens . orth
 --
 
 
--- -- | Generalized querify based on the orthographic form only.
--- querifyOrth :: Text -> E.Expr E.SklTree
--- querifyOrth orth = E.andQ
---   [ E.trunk $ E.hasOrths orthForms
---   , E.IfThenElse checkLeaves markLeaves (E.B False)
---   ]
---   where
---     orthForms = partition orth
---     -- leaves = map (L.toStrict . S.orth) . E.terminals
---     leaves = map S.orth . E.terminals
---     -- below, it is easier to use `Satisfy` to check that terminals occur in
---     -- appropriate order, but finally the leaves have to be marked as MWE
---     -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
---     -- function.
---     checkLeaves = E.Satisfy $ \t -> orthForms `isInfixOf` leaves t
---     markLeaves = E.andQ
---       [ E.ancestor (E.hasOrth form)
---       | form <- orthForms ]
-
-
 -- | Generalized querify based on the orthographic form only.
--- This version checks the condition that all components are in leaves (in the
--- appriorate order) and that this condition is *not* satisfied for any of the
--- children subtrees.
-querifyOrth :: CaseSensitivity -> Text -> E.Expr E.SklTree
-querifyOrth caseSens orth =
-  E.IfThenElse checkLeaves markLeaves (E.B False)
+querifyOrth :: CaseSensitive -> Text -> E.Expr E.SklTree
+querifyOrth caseSens orth = E.andQ
+  [ checkTrunk
+  , E.IfThenElse checkLeaves markLeaves (E.B False)
+  ]
   where
-    -- it is easier to use `Satisfy` to check that terminals occur in
-    -- appropriate order, but finally the leaves have to be marked as MWE
-    -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
-    -- function.
+    -- below, it is easier to use `Satisfy` to check that terminals
+    -- occur in appropriate order, but finally the leaves have to be
+    -- marked as MWE components separately (`Satisfy` doesn't mark),
+    -- hense the `markLeaves` function.
     checkLeaves = E.Satisfy $ \t ->
-      orthInLeaves t &&
-      (not.or) [orthInLeaves s | s <- children t]
+      casedOrthParts
+      `isInfixOf`
+      map withCase (leaves t)
       where
-        children = map fst . S.subForest
-        orthInLeaves t =
-          map withCase (partition orth)
-          `isInfixOf`
-          map withCase (leaves t)
         leaves = map S.orth . E.terminals
-    -- TODO: note that `markLeaves` can mark more than identified with
-    -- `checkLeaves`!
+    -- check that at leat one of the MWE componenets is on the trunk.
+    checkTrunk = E.trunk . E.hasOrth $ \word ->
+      withCase word `elem` casedOrthParts
+    -- TODO: note that `markLeaves` can mark more than identified
+    -- with `checkLeaves`!
     markLeaves = E.andQ
       [ E.ancestor . E.hasOrth $ \word ->
-          withCase word == withCase form
-      | form <- partition orth ]
+          withCase word == casedForm
+      | casedForm <- casedOrthParts ]
     -- take into account case sensitivity
     withCase = case caseSens of
       CaseSensitive -> id
       IgnoreCase -> T.toLower
+    casedOrthParts = map withCase (partition orth)
+
+
+-- -- | Generalized querify based on the orthographic form only.
+-- -- This version checks the condition that all components are in leaves (in the
+-- -- appriorate order) and that this condition is *not* satisfied for any of the
+-- -- children subtrees.
+-- querifyOrth :: CaseSensitivity -> Text -> E.Expr E.SklTree
+-- querifyOrth caseSens orth =
+--   E.IfThenElse checkLeaves markLeaves (E.B False)
+--   where
+--     -- it is easier to use `Satisfy` to check that terminals occur in
+--     -- appropriate order, but finally the leaves have to be marked as MWE
+--     -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
+--     -- function.
+--     checkLeaves = E.Satisfy $ \t ->
+--       orthInLeaves t &&
+--       (not.or) [orthInLeaves s | s <- children t]
+--       where
+--         children = map fst . S.subForest
+--         orthInLeaves t =
+--           map withCase (partition orth)
+--           `isInfixOf`
+--           map withCase (leaves t)
+--         leaves = map S.orth . E.terminals
+--     -- TODO: note that `markLeaves` can mark more than identified with
+--     -- `checkLeaves`!
+--     markLeaves = E.andQ
+--       [ E.ancestor . E.hasOrth $ \word ->
+--           withCase word == withCase form
+--       | form <- partition orth ]
+--     -- take into account case sensitivity
+--     withCase = case caseSens of
+--       CaseSensitive -> id
+--       IgnoreCase -> T.toLower
 
 
 -- | Extract parts of the given textual form, using spaces and interpunction
