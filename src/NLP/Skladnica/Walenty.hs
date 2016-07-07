@@ -196,8 +196,8 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
       E.lift $ putStrLn $ "Relevant SEJF expressions: " ++ show sejf
       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
-        -- let mweTree = Q.markAll (exprs1 ++ exprs2 ++ exprs3) sklTree
-        let mweTree = Q.markAll [] sklTree
+        let mweTree = Q.markAll (exprs1 ++ exprs2 ++ exprs3) sklTree
+        -- let mweTree = Q.markAll [] sklTree
             sklETs  = G.extractGrammar sklTree
             mweETs = G.extractGrammar mweTree
             est = sklETs `S.union` mweETs
@@ -649,7 +649,7 @@ fullTest skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   let conf = ParseConf
        { showTrees = Just 1 -- Nothing
        , restrictGrammar = True
-       , pickFile = 1.0
+       , pickFile = 0.0
        , useFreqs = freqMap extr } -- or Nothing
   parsingTest skladnicaDir extr "wypowiedzenie" conf
 

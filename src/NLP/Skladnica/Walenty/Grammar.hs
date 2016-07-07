@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE RecordWildCards    #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TupleSections      #-}
 
 
 -- | Provisional grammar extraction module.
@@ -109,7 +110,9 @@ statTree
   -> S.Tree (S.Label, Status) S.IsHead -- ^ Status-labeled current node (tree)
 statTree trace t
    -- whatever the leaf, it must be in a trunk
-   | null (R.subForest t) = S.modifyRootNode (\x -> (x, Trunk)) t
+   | null (R.subForest t) = R.Node
+     { R.rootLabel = S.modifyNode (, Trunk) (R.rootLabel t)
+     , R.subForest = [] }
    | otherwise =
        -- let (subTrees0, areHeads0) = unzip (S.subForest t)
        let subTrees0 = R.subForest t

@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 
@@ -12,25 +13,28 @@ module NLP.Skladnica.Walenty.Sejf
 , partition
 , querify
 , querifyOrth
+, querify'
+, querifyOrth'
 -- * Parsing
 , readSejf
 , parseSejf
 , parseEntry
 ) where
 
-import           Control.Arrow                (first)
-import           Control.Monad                (guard, msum)
+import           Control.Arrow                 (first)
+import           Control.Monad                 (guard, msum)
 
-import           Data.List                    (isInfixOf)
-import qualified Data.Char                    as C
-import           Data.Text                    (Text)
-import qualified Data.Text                    as T
-import qualified Data.Text.Lazy               as L
-import qualified Data.Text.Lazy.IO            as L
-import qualified Data.Tree                    as R
+import qualified Data.Char                     as C
+import           Data.List                     (isInfixOf)
+import           Data.Text                     (Text)
+import qualified Data.Text                     as T
+import qualified Data.Text.Lazy                as L
+import qualified Data.Text.Lazy.IO             as L
+import qualified Data.Tree                     as R
 
-import qualified NLP.Skladnica                as S
-import qualified NLP.Skladnica.Walenty.Search as E
+import qualified NLP.Skladnica                 as S
+import qualified NLP.Skladnica.Walenty.Search  as E
+import qualified NLP.Skladnica.Walenty.Search2 as E2
 
 -- import Debug.Trace (trace)
 
@@ -65,19 +69,8 @@ data CaseSensitivity
 -- | Check if the head terminal has the corresponding tag
 -- and if every part of the `orth` form is present in terminal
 -- leaves.
-querify
-  :: CaseSensitivity
-     -- ^ Regarding the comparison of the orthographic form
-  -> SejfEntry
-  -> E.Expr E.SklTree
+querify :: CaseSensitivity -> SejfEntry -> E.Expr E.SklTree
 querify caseSens = querifyOrth caseSens . orth
--- querify SejfEntry{..} = E.andQ
---   [ E.trunk (E.hasTag tag)
---   , E.andQ
---     [ E.anyAncestor (E.hasOrth form)
---     | form <- partition orth ]
---   ]
---
 
 
 -- | Generalized querify based on the orthographic form only.
@@ -113,38 +106,54 @@ querifyOrth caseSens orth = E.andQ
     casedOrthParts = map withCase (partition orth)
 
 
--- -- | Generalized querify based on the orthographic form only.
--- -- This version checks the condition that all components are in leaves (in the
--- -- appriorate order) and that this condition is *not* satisfied for any of the
--- -- children subtrees.
--- querifyOrth :: CaseSensitivity -> Text -> E.Expr E.SklTree
--- querifyOrth caseSens orth =
---   E.IfThenElse checkLeaves markLeaves (E.B False)
---   where
---     -- it is easier to use `Satisfy` to check that terminals occur in
---     -- appropriate order, but finally the leaves have to be marked as MWE
---     -- components separately (`Satisfy` doesn't mark), hense the `markLeaves`
---     -- function.
---     checkLeaves = E.Satisfy $ \t ->
---       orthInLeaves t &&
---       (not.or) [orthInLeaves s | s <- children t]
---       where
---         children = map fst . S.subForest
---         orthInLeaves t =
---           map withCase (partition orth)
---           `isInfixOf`
---           map withCase (leaves t)
---         leaves = map S.orth . E.terminals
---     -- TODO: note that `markLeaves` can mark more than identified with
---     -- `checkLeaves`!
---     markLeaves = E.andQ
---       [ E.ancestor . E.hasOrth $ \word ->
---           withCase word == withCase form
---       | form <- partition orth ]
---     -- take into account case sensitivity
---     withCase = case caseSens of
---       CaseSensitive -> id
---       IgnoreCase -> T.toLower
+--------------------------------------------------------------------------------
+-- Entry Convertion 2
+--------------------------------------------------------------------------------
+
+
+-- | Check if the head terminal has the corresponding tag
+-- and if every part of the `orth` form is present in terminal
+-- leaves.
+querify' :: CaseSensitivity -> SejfEntry -> E2.Expr E2.Edge 'E2.Tree
+querify' caseSens = querifyOrth' caseSens . orth
+
+
+-- | Generalized querify based on the orthographic form only.
+querifyOrth' :: CaseSensitivity -> Text -> E2.Expr E2.Edge 'E2.Tree
+querifyOrth' caseSens orth = E2.andQ
+  [ checkTrunk
+  , E2.ifThenElse checkLeaves markLeaves (E2.B False)
+  ]
+  where
+    -- below, it is easier to use `Satisfy` to check that terminals
+    -- occur in appropriate order, but finally the leaves have to be
+    -- marked as MWE components separately (`Satisfy` doesn't mark),
+    -- hense the `markLeaves` function.
+    checkLeaves = E2.SatisfyTree $ \t ->
+      casedOrthParts
+      `isInfixOf`
+      map withCase (leaves t)
+      where
+        leaves = map S.orth . E2.terminals
+    -- check that at leat one of the MWE componenets is on the trunk.
+    checkTrunk = E2.trunk . E2.hasOrth $ \word ->
+      withCase word `elem` casedOrthParts
+    -- TODO: note that `markLeaves` can mark more than identified
+    -- with `checkLeaves`!
+    markLeaves = E2.andQ
+      [ E2.anyAncestor . E2.hasOrth $ \word ->
+          withCase word == casedForm
+      | casedForm <- casedOrthParts ]
+    -- take into account case sensitivity
+    withCase = case caseSens of
+      CaseSensitive -> id
+      IgnoreCase -> T.toLower
+    casedOrthParts = map withCase (partition orth)
+
+
+--------------------------------------------------------------------------------
+-- Partition
+--------------------------------------------------------------------------------
 
 
 -- | Extract parts of the given textual form, using spaces and interpunction
