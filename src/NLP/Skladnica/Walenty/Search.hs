@@ -41,6 +41,7 @@ import           Data.List                 (foldl')
 import qualified Data.Map.Strict           as M
 import           Data.Maybe                (catMaybes, fromMaybe, isJust)
 import           Data.Text                 (Text)
+import qualified Data.Tree                 as R
 -- import qualified Data.Text.Lazy            as L
 
 import qualified NLP.Skladnica             as S
@@ -112,7 +113,7 @@ data Expr a where
   -- relation can be checked.
   Child :: (S.IsHead -> Bool) -> Expr SklTree -> Expr SklTree
   -- Like `Child` but doesn't update the parent node
-  -- (useful e.g. for agreement constraints)
+  -- (useful, e.g., for agreement constraints)
   -- TODO: `Child` and `SkipChild` could be represented by one constructor
   SkipChild :: (S.IsHead -> Bool) -> Expr SklTree -> Expr SklTree
   -- Check that the tree is non-branching
@@ -431,7 +432,8 @@ getAttr x S.Node{..} = do
 -- just in case.
 data EvalState = EvalState
   { parentTree :: SklTree
-  } deriving (Show, Eq, Ord)
+  }
+  -- } deriving (Show, Eq, Ord)
 
 
 -- | Evaluation monad.
@@ -476,21 +478,22 @@ evaluate (IfThenElse b e1 e2) t = do
     then evaluate e1 t
     else evaluate e2 t
 evaluate (Satisfy p) x = return (p x)
-evaluate (Current e) t = evaluate e (S.rootLabel t)
+evaluate (Current e) t = evaluate e (S.nodeLabel $ R.rootLabel t)
 evaluate (Child p e) t = withParent t $ evaluate (SkipChild p e) t
 --   or <$> sequence
 --     [ evaluate e s
 --     | (s, h) <- S.subForest t, p h ]
 evaluate (SkipChild p e) t =
   or <$> sequence
-    [ evaluate e s
-    | (s, h) <- S.subForest t, p h ]
+    [ evaluate e child
+    | child <- R.subForest t
+    , p (S.edgeLabel $ R.rootLabel child) ]
 evaluate (Satisfy2 p) childNode = do
-  parentNode <- S.rootLabel <$> getParent
+  parentNode <- S.nodeLabel . R.rootLabel <$> getParent
   return $ p parentNode childNode
-evaluate NonBranching t = case S.subForest t of
+evaluate NonBranching t = case R.subForest t of
   [] -> return True
-  [x] -> evaluate NonBranching (fst x)
+  [x] -> evaluate NonBranching x
   _ -> return False
 
 
@@ -501,9 +504,8 @@ findNodes
   -> [SklTree]
 -- findNodes e t = filter (evaluate Nothing e) (subTrees t)
 findNodes e t =
-  let xs = map fst $ S.subForest t
-   in [x | x <- xs, runEval e t x] ++
-      concatMap (findNodes e) xs
+  [x | x <- R.subForest t, runEval e t x] ++
+  concatMap (findNodes e) (R.subForest t)
 
 
 -- -- | Take all subtrees of the given skladnica tree.
@@ -567,28 +569,33 @@ mark (Satisfy p) node = maybeT $ case p node of
   True  -> Just node
 mark (Current e) t =
   -- note that here we assume that nodes do not change
-  t <$ mark e (S.rootLabel t)
+  t <$ mark e (S.nodeLabel $ R.rootLabel t)
 mark (Child p e) t = withParent' t $ mark (SkipChild p e) t
 mark (SkipChild p e) t = do
   -- we need to enforce that one of the children
   -- satisfies the expression `e`.
-  forest <- go $ S.subForest t
-  return $ t {S.subForest = forest}
+  forest <- go $ R.subForest t
+  return $ t {R.subForest = forest}
   where
     go [] = empty
-    go (x@(s, h) : xs)
+    go (x : xs)
       -- below we mark the processed element
-      | p h = (\y -> (y, S.HeadYes) : xs) <$> mark e s
-          <|> (x :) <$> go xs
+      | p (S.edgeLabel $ R.rootLabel x) = do
+          y <- mark e x
+          return $ setEdge S.HeadYes y : xs
+        <|> (x :) <$> go xs
       | otherwise = (x :) <$> go xs
+    setEdge x tr =
+      let edge = R.rootLabel tr
+      in tr {R.rootLabel = edge {S.edgeLabel = x}}
 mark (Satisfy2 p) childNode = do
-  parentNode <- S.rootLabel <$> getParent'
+  parentNode <- S.nodeLabel . R.rootLabel <$> getParent'
   if p parentNode childNode
     then return childNode
     else empty
-mark NonBranching t = case S.subForest t of
+mark NonBranching t = case R.subForest t of
   [] -> return t
-  [x] -> t <$ mark NonBranching (fst x)
+  [x] -> t <$ mark NonBranching x
   _ -> empty
 
 
@@ -599,9 +606,8 @@ markNodes
   -> [SklTree]
 -- findNodes e t = filter (evaluate Nothing e) (subTrees t)
 markNodes e t =
-  let xs = map fst $ S.subForest t
-   in catMaybes [runMark e t x | x <- xs] ++
-      concatMap (markNodes e) xs
+   catMaybes [runMark e t x | x <- R.subForest t] ++
+   concatMap (markNodes e) (R.subForest t)
 
 
 -- | Match all the given expressions against all the nodes
@@ -621,9 +627,9 @@ markOne e t =
   where
     go parent tree =
       let subForest =
-            [ (go tree child, h)
-            | (child, h) <- S.subForest tree ]
-          tree' = tree {S.subForest = subForest}
+            [ go tree child
+            | child <- R.subForest tree ]
+          tree' = tree {R.subForest = subForest}
       in fromMaybe tree' $ runMark e parent tree'
 
 

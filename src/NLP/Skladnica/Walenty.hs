@@ -196,8 +196,8 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
       E.lift $ putStrLn $ "Relevant SEJF expressions: " ++ show sejf
       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
-        let mweTree = Q.markAll (exprs1 ++ exprs2 ++ exprs3) sklTree
-        -- let mweTree = Q.markAll exprs2 sklTree
+        -- let mweTree = Q.markAll (exprs1 ++ exprs2 ++ exprs3) sklTree
+        let mweTree = Q.markAll [] sklTree
             sklETs  = G.extractGrammar sklTree
             mweETs = G.extractGrammar mweTree
             est = sklETs `S.union` mweETs
@@ -568,21 +568,21 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
             final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                    && AStar._dagID p == Left begSym
         contRef <- E.lift $ newIORef None
-        -- derivsOnlineRef <- E.lift $ newIORef (S.empty, 0 :: Int)
-        -- derivsFinalRef <- E.lift $ newIORef (S.empty, 0 :: Int)
+        derivsOnlineRef <- E.lift $ newIORef (S.empty, 0 :: Int)
+        derivsFinalRef <- E.lift $ newIORef (S.empty, 0 :: Int)
         hype <- runEffect . for pipe $ \(hypeModif, derivTrees) -> do
           let item = AStar.modifItem hypeModif
               itemWeight = AStar.modifTrav hypeModif
               hype = AStar.modifHype hypeModif
---           case showTrees of
---             Nothing -> return ()
---             Just _ -> liftIO $ do
---               -- putStrLn "<|New HyperModif|>"
---               forM_ derivTrees $ \t -> do
---                 putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
---                 -- modifyIORef derivsOnlineRef $ \(s, n) -> (S.insert t s, n + 1)
---                 -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
---                 -- (AStar.fromPassive p hype)
+          case showTrees of
+            Nothing -> return ()
+            Just _ -> liftIO $ do
+              -- putStrLn "<|New HyperModif|>"
+              forM_ derivTrees $ \t -> do
+                putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
+                modifyIORef derivsOnlineRef $ \(s, n) -> (S.insert t s, n + 1)
+                -- (putStrLn . R.drawTree . fmap show . T.encode . Left)
+                -- (AStar.fromPassive p hype)
           void . runMaybeT $ do
             cont <- liftIO (readIORef contRef)
             case cont of
@@ -608,25 +608,25 @@ parsingTest skladnicaDir Extract{..} begSym ParseConf{..} = do
         if skladnicaXML `S.member` mweFiles
           then updateMweStatsFinal sentLen hype
           else updateOtherStatsFinal sentLen hype
---         case showTrees of
---           Nothing -> return ()
---           Just _ -> liftIO $ do
---             let derivList = Deriv.derivTrees hype begSym sentLen
---             forM_ derivList $ \t -> do
---               putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
---               modifyIORef derivsFinalRef $ \(s, n) -> (S.insert t s, n + 1)
---             derivsOnline <- readIORef derivsOnlineRef
---             derivsFinal <- readIORef derivsFinalRef
---             liftIO . putStrLn $ "# of on-the-fly derived trees: "
---               ++ show (snd derivsOnline)
---             liftIO . putStrLn $ "# of distinct on-the-fly derived trees: "
---               ++ show (S.size $ fst derivsOnline)
---             liftIO . putStrLn $ "# of final derived trees: "
---               ++ show (snd derivsFinal)
---             liftIO . putStrLn $ "# of distinct final derived trees: "
---               ++ show (S.size $ fst derivsFinal)
---             liftIO . putStrLn $ "final derivations == on-the-fly derivations: "
---               ++ show (fst derivsFinal == fst derivsOnline)
+        case showTrees of
+          Nothing -> return ()
+          Just _ -> liftIO $ do
+            let derivList = Deriv.derivTrees hype begSym sentLen
+            forM_ derivList $ \t -> do
+              putStrLn . R.drawTree . fmap show . Deriv.deriv4show $ t
+              modifyIORef derivsFinalRef $ \(s, n) -> (S.insert t s, n + 1)
+            derivsOnline <- readIORef derivsOnlineRef
+            derivsFinal <- readIORef derivsFinalRef
+            liftIO . putStrLn $ "# of on-the-fly derived trees: "
+              ++ show (snd derivsOnline)
+            liftIO . putStrLn $ "# of distinct on-the-fly derived trees: "
+              ++ show (S.size $ fst derivsOnline)
+            liftIO . putStrLn $ "# of final derived trees: "
+              ++ show (snd derivsFinal)
+            liftIO . putStrLn $ "# of distinct final derived trees: "
+              ++ show (S.size $ fst derivsFinal)
+            liftIO . putStrLn $ "final derivations == on-the-fly derivations: "
+              ++ show (fst derivsFinal == fst derivsOnline)
     getWeight e = AStar.priWeight e + AStar.estWeight e
 
 
@@ -649,7 +649,7 @@ fullTest skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   let conf = ParseConf
        { showTrees = Just 1 -- Nothing
        , restrictGrammar = True
-       , pickFile = 0.0
+       , pickFile = 1.0
        , useFreqs = freqMap extr } -- or Nothing
   parsingTest skladnicaDir extr "wypowiedzenie" conf
 

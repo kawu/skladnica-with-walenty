@@ -71,6 +71,16 @@ status xs = case xs of
       parLab `is` "fpm"  -> Arg
     | curLab `is` "zdanie" &&
       parLab `is` "fzd"  -> Arg
+    -- the rule below was added to avoid analyzing conjunctions (e.g., commas)
+    -- as sentences which can be modified through adjunction.  Ideally we would
+    -- like to enforce here that conjunction ("spójnik") is directly on the left
+    -- or on the right of `curLab` node.
+    | curLab `is` "zdanie" &&
+      parLab `is` "zdanie" -> Arg
+    -- to avoid analyzing additional conjunctions (like in the sentence
+    -- "Często chodzili do pubu, pili piwo, rozmawiali.", where only one
+    -- of the commas is marked as a trunk) as auxiliaries.
+    | curLab `is` "spójnik" -> Trunk
     | otherwise          -> Modif
   (curLab, curHead) : []
     | curHead == S.HeadYes -> Trunk
@@ -94,18 +104,20 @@ statRoot = statTree []
 
 -- | Determine the status of the internal tree nodes.
 statTree
-  :: [(S.Label, S.IsHead)]           -- ^ Trace from the current node to the root
+  :: [(S.Label, S.IsHead)]             -- ^ Trace from the current node to the root
   -> S.Tree S.Label S.IsHead           -- ^ Current node (tree)
   -> S.Tree (S.Label, Status) S.IsHead -- ^ Status-labeled current node (tree)
 statTree trace t
-   | null (S.subForest t) = S.Tree
-       -- whatever the leaf, it must be in a trunk
-       { S.rootLabel = (S.rootLabel t, Trunk)
-       , S.subForest = [] }
+   -- whatever the leaf, it must be in a trunk
+   | null (R.subForest t) = S.modifyRootNode (\x -> (x, Trunk)) t
    | otherwise =
-       let (subTrees0, areHeads0) = unzip (S.subForest t)
+       -- let (subTrees0, areHeads0) = unzip (S.subForest t)
+       let subTrees0 = R.subForest t
+           areHeads0 =
+             [ S.edgeLabel $ R.rootLabel child
+             | child <- R.subForest t ]
            areHeads =
-             -- WARNING! IMPORTANT: a backup strategy which
+             -- WARNING! IMPORTANT: a fallback strategy which
              -- handles the case when none of the children
              -- is marked as the head.
              if S.HeadYes `elem` areHeads0
@@ -115,12 +127,12 @@ statTree trace t
            subTrees = flip map (zip subTrees0 areHeads) $
              \(subTree, isHead) ->
                statTree
-                 ((S.rootLabel subTree, isHead) : trace)
+                 ((S.nodeLabel $ R.rootLabel subTree, isHead) : trace)
                  subTree
-        in S.Tree { S.rootLabel =
-                    ( S.rootLabel t
-                    , status trace )
-                , S.subForest = zip subTrees areHeads }
+        in R.Node
+           { R.rootLabel = S.modifyNode (\x -> (x, status trace)) (R.rootLabel t)
+           -- , R.subForest = zip subTrees areHeads }
+           , R.subForest = subTrees }
 
 
 -- | Prepare the tree for grammar extraction:

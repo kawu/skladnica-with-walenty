@@ -27,11 +27,12 @@ import           Data.Text                    (Text)
 import qualified Data.Text                    as T
 import qualified Data.Text.Lazy               as L
 import qualified Data.Text.Lazy.IO            as L
+import qualified Data.Tree                    as R
 
 import qualified NLP.Skladnica                as S
 import qualified NLP.Skladnica.Walenty.Search as E
 
-import Debug.Trace (trace)
+-- import Debug.Trace (trace)
 
 
 --------------------------------------------------------------------------------
@@ -73,7 +74,7 @@ querify caseSens = querifyOrth caseSens . orth
 -- querify SejfEntry{..} = E.andQ
 --   [ E.trunk (E.hasTag tag)
 --   , E.andQ
---     [ E.ancestor (E.hasOrth form)
+--     [ E.anyAncestor (E.hasOrth form)
 --     | form <- partition orth ]
 --   ]
 --
@@ -95,7 +96,7 @@ querify caseSens = querifyOrth caseSens . orth
 --     -- function.
 --     checkLeaves = E.Satisfy $ \t -> orthForms `isInfixOf` leaves t
 --     markLeaves = E.andQ
---       [ E.ancestor (E.hasOrth form)
+--       [ E.anyAncestor (E.hasOrth form)
 --       | form <- orthForms ]
 
 
@@ -113,9 +114,8 @@ querifyOrth caseSens orth =
     -- function.
     checkLeaves = E.Satisfy $ \t ->
       orthInLeaves t &&
-      (not.or) [orthInLeaves s | s <- children t]
+      (not.or) [orthInLeaves s | s <- R.subForest t]
       where
-        children = map fst . S.subForest
         orthInLeaves t =
           map withCase (partition orth)
           `isInfixOf`
@@ -124,7 +124,7 @@ querifyOrth caseSens orth =
     -- TODO: note that `markLeaves` can mark more than identified with
     -- `checkLeaves`!
     markLeaves = E.andQ
-      [ E.ancestor . E.hasOrth $ \word ->
+      [ E.anyAncestor . E.hasOrth $ \word ->
           withCase word == withCase form
       | form <- partition orth ]
     -- take into account case sensitivity
