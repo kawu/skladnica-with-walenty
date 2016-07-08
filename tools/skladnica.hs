@@ -17,6 +17,7 @@ import qualified Data.Char as C
 
 
 import qualified NLP.Skladnica.Map as Mapping
+import qualified NLP.Skladnica.Extract as Extract
 import qualified NLP.Skladnica.Walenty.MweTree as MweTree
 
 
@@ -32,6 +33,8 @@ data Command
       -- ^ Only parse and show the input XML file
     | Emboss FilePath
       -- ^ Mark MWEs as heads
+    | ExtractMWEs FilePath
+      -- ^ Extract ETs from the input XML files and show MWE trees
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -101,6 +104,15 @@ parseOptions = Parse
 
 embossOptions :: Parser Command
 embossOptions = Emboss
+  <$> strOption
+     ( long "treebank"
+    <> short 't'
+    <> metavar "FILE"
+    <> help "Treebank .xml file" )
+
+
+extractMWEsOptions :: Parser Command
+extractMWEsOptions = ExtractMWEs
   <$> strOption
      ( long "treebank"
     <> short 't'
@@ -248,6 +260,10 @@ opts = subparser
             (info (helper <*> embossOptions)
                 (progDesc "Parse the input treebank XML file")
                 )
+        <> command "extract-mwes"
+            (info (helper <*> extractMWEsOptions)
+                (progDesc "Extract ETs from the input XML files and show MWE trees")
+                )
 --         <> command "trees"
 --             (info (helper <*> (Trees <$> buildDataParser))
 --                 (progDesc "Show elementary trees, no FSs")
@@ -298,6 +314,7 @@ run cmd =
     Map cfg -> Mapping.mapMWEs cfg
     Parse path -> MweTree.parseAndPrint id path
     Emboss path -> MweTree.parseAndPrint MweTree.emboss path
+    ExtractMWEs path -> Extract.extractGrammar path
 
 --          Trees buildData ->
 --             B.printTrees buildData

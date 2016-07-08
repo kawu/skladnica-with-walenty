@@ -44,6 +44,7 @@ library
     exposed-modules:
         NLP.Skladnica.Walenty
       , NLP.Skladnica.Map
+      , NLP.Skladnica.Extract
       , NLP.Skladnica.Walenty.Search
       , NLP.Skladnica.Walenty.Prune
       , NLP.Skladnica.Walenty.Grammar
