@@ -16,25 +16,26 @@ module NLP.Skladnica.Extract
 
 import           Control.Monad                 (forM_)
 
+-- import qualified Data.ByteString               as BS
 import           Data.Either                   (lefts)
 import           Data.Maybe                    (mapMaybe)
 import qualified Data.Set                      as S
-import           Data.Tree                     as R
+import qualified Data.Text                     as T
 import qualified Data.Text.IO                  as T
-import           Data.Text                     (Text)
+import           Data.Tree                     as R
 
 import qualified System.FilePath.Find          as F
 
 import qualified NLP.Skladnica                 as Skl
 import qualified NLP.Walenty                   as W
 
+import qualified NLP.Skladnica.Walenty.Mapping as Mapping
 import qualified NLP.Skladnica.Walenty.Prune   as P
 import qualified NLP.Skladnica.Walenty.Search2 as Q
-import qualified NLP.Skladnica.Walenty.Mapping as Mapping
 -- import qualified NLP.Skladnica.Walenty.Select  as Select
-import qualified NLP.Skladnica.Walenty.Sejf    as Sejf
-import qualified NLP.Skladnica.Walenty.NcpNEs  as NE
 import qualified NLP.Skladnica.Walenty.MweTree as MWE
+import qualified NLP.Skladnica.Walenty.NcpNEs  as NE
+import qualified NLP.Skladnica.Walenty.Sejf    as Sejf
 
 
 ------------------------------------------------------------------------------
@@ -82,7 +83,7 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
     -- procPath walenty sejf0 nes0 skladnicaXML = do
     procPath walenty sejf0 nes0 skladnicaXML = do
       -- putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
-      putStr "<tree>"
+      -- putStr "<tree>"
       sklForest <- forestFromXml skladnicaXML
       let sentSet = case sklForest of
             sklTree : _ -> S.fromList $
@@ -104,8 +105,9 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
 --       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
         let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
-        T.putStr . MWE.renderXml . MWE.mweTreeXml . MWE.fromOut $ mweTree
-      putStrLn "</tree>"
+        -- BS.putStr $ MWE.outToXml' mweTree
+        T.putStrLn $ MWE.outToXml [("file", T.pack skladnicaXML)] mweTree
+      -- putStrLn "</tree>"
 --             label edge = case Skl.label (Skl.nodeLabel edge) of
 --               Left nt -> (nid, Skl.cat nt)
 --               Right t -> (nid, Skl.orth t)
@@ -152,7 +154,7 @@ forestFromXml xml = do
 -- | Use `Sejf.partition` to determine component words and put them (under the
 -- form of a set) on the second position of the corresponding list elements.
 -- Preserve only these entries which have more than one component words.
-sejfPartition :: (a -> Text) -> [a] -> [(a, S.Set Text)]
+sejfPartition :: (a -> T.Text) -> [a] -> [(a, S.Set T.Text)]
 -- sejfPartition f = map $ \x -> (x, S.fromList . Sejf.partition . f $ x)
 sejfPartition f xs =
   [ (x, wordSet)

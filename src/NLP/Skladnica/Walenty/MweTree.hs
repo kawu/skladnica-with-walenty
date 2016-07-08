@@ -20,21 +20,31 @@ module NLP.Skladnica.Walenty.MweTree
 -- * Rendering
 , XmlTree
 , XmlForest
+, rootToXml
 , mweTreeXml
 , renderXml
+-- , renderXml'
+
+-- * Utils
+, outToXml
+-- , outToXml'
 ) where
 
 
-import qualified Data.Set          as S
-import qualified Data.Text         as T
-import qualified Data.Tree         as R
+import           Control.Monad      (msum)
 
-import qualified Text.HTML.TagSoup as Tag
-import qualified Text.XML.PolySoup as Poly
+-- import qualified Data.ByteString    as BS
+import qualified Data.Map.Strict    as M
+import qualified Data.Set           as S
+import qualified Data.Text          as T
+-- import qualified Data.Text.Encoding as T
+import qualified Data.Tree          as R
 
-import qualified NLP.Skladnica     as Skl
-import qualified NLP.Walenty.Types as W
+import qualified Text.HTML.TagSoup  as Tag
+import qualified Text.XML.PolySoup  as Poly
 
+import qualified NLP.Skladnica      as Skl
+import qualified NLP.Walenty.Types  as W
 
 
 --------------------------------------------------------------------------------
@@ -86,7 +96,7 @@ fromOut = fmap $ uncurry MweNode
 
 
 ------------------------------------------------------------------------------
--- XML Rendering
+-- Conversion to XML
 --------------------------------------------------------------------------------
 
 
@@ -97,18 +107,98 @@ type XmlTree = Poly.XmlTree T.Text
 type XmlForest = Poly.XmlForest T.Text
 
 
+-- | Top-level conversion from a `MweTree` to an XML tree.
+-- The function takes as argument a list of attribute/value
+-- pairs that will be assigned to the top-level <tree> node.
+rootToXml :: [(T.Text, T.Text)] -> MweTree -> XmlTree
+rootToXml atts root = R.Node
+  { R.rootLabel = Tag.TagOpen "tree" atts
+  , R.subForest = [mweTreeXml root ]}
+
+
 -- | Convert a `MweTree` to an XML tree.
 mweTreeXml :: MweTree -> XmlTree
-mweTreeXml R.Node{..} = R.Node
-  { R.rootLabel = Tag.TagOpen "node" [("nid", T.pack (show nid))]
-  , R.subForest = map mweTreeXml subForest }
+mweTreeXml root@R.Node{..} = R.Node
+  { R.rootLabel = Tag.TagOpen nodeType atts
+  , R.subForest =
+      labelXml (Skl.label nodeLabel) ++
+      mweForest ++
+      map mweTreeXml subForest }
   where
-    nid = Skl.nid . Skl.nodeLabel . sklNode $ rootLabel
+    nodeLabel = Skl.nodeLabel . sklNode $ rootLabel
+    nodeType = case Skl.label nodeLabel of
+      Left _nonTerm -> "node"
+      Right _term -> "leaf"
+    nodeNid = T.pack . show . Skl.nid $ nodeLabel
+    -- atts = [("nid", nodeNid), ("type", nodeType)]
+    atts = [("nid", nodeNid)]
+    mweForest = mweSetXml root . mweSet $ rootLabel
 
 
--- | Render XML tree.
-renderXml :: XmlTree -> T.Text
-renderXml = Tag.renderTags . Poly.renderTree
+-- | Convert a node label to an XML forest containing additional information
+-- about the specific node.
+labelXml :: Skl.Label -> XmlForest
+labelXml (Right Skl.Term{..}) =
+  [ atom' "orth" orth
+  , atom' "base" base
+  , atom' "tag" tag ]
+labelXml (Left Skl.NonTerm{..}) =
+  [ atom' "cat" cat
+  , leaf "morph" (M.toList morph) ]
+--   , R.Node (Tag.TagOpen "morph" [])
+--       [atom' attr val | (attr, val) <- M.toList morph]
+
+
+-- | Convert a set of MWE identifiers to an XML forest.
+mweSetXml :: MweTree -> S.Set Skl.NID -> XmlForest
+mweSetXml tree s
+  | S.null s = []
+  | otherwise = (:[]) $ R.Node
+    { R.rootLabel = Tag.TagOpen "mwe" []
+    , R.subForest = map (mweXml tree) (S.toList s) }
+
+
+-- | Convert a MWE to an XML tree.
+mweXml :: MweTree -> Skl.NID -> XmlTree
+mweXml tree nid = leaf "lex"
+  [ ("nid", T.pack (show nid))
+  , ("base", maybe "???" id
+             $ findBase nid tree) ]
+
+
+-- | Find base form corresponding to the given node ID.
+findBase :: Skl.NID -> MweTree -> Maybe T.Text
+findBase i R.Node{..}
+  | i == nodeNid = nodeBase
+  | otherwise = msum $ map (findBase i) subForest
+  where
+    nodeNid = Skl.nid nodeLabel
+    nodeLabel = Skl.nodeLabel . sklNode $ rootLabel
+    nodeBase = case Skl.label nodeLabel of
+      Right Skl.Term{..} -> Just base
+      _ -> Nothing
+
+
+-- | Leaf tree with the given list of attributes.
+leaf :: T.Text -> [(T.Text, T.Text)] -> XmlTree
+leaf name atts = R.Node (Tag.TagOpen name atts) []
+
+
+-- -- | Leaf tree with an atomic value.
+-- atom :: T.Text -> T.Text -> XmlTree
+-- atom name val = leaf name [("val", val)]
+
+
+-- | Alternative atomic value where the value is stored as a textual leaf.
+atom' :: T.Text -> T.Text -> XmlTree
+atom' name val = R.Node
+  { R.rootLabel = Tag.TagOpen name []
+  , R.subForest = [text val] }
+
+
+-- | Textual leaf.
+text :: T.Text -> XmlTree
+text x = R.Node (Tag.TagText x) []
 
 
 -- -- | Convert a `Skl.Node` to an XML tree.
@@ -116,3 +206,34 @@ renderXml = Tag.renderTags . Poly.renderTree
 -- sklNodeXml Skl.Node{..} = R.Node
 --   { R.rootLabel = Tag.TagOpen "nid" [("nid", T.pack (show nid))]
 --   , R.subForest = [] }
+
+
+------------------------------------------------------------------------------
+-- XML Rendering
+--------------------------------------------------------------------------------
+
+
+-- | Render XML tree.
+renderXml :: XmlTree -> T.Text
+renderXml = Tag.renderTags . Poly.renderTree
+
+
+-- -- | Like `renderXml` but gives utf8 encoded bytestring.
+-- renderXml' :: XmlTree -> BS.ByteString
+-- renderXml' = Tag.renderTags . map (fmap T.encodeUtf8) . Poly.renderTree
+
+
+------------------------------------------------------------------------------
+-- Utils
+--------------------------------------------------------------------------------
+
+
+-- | A function which combines several lower-level functions and produces an XML
+-- tree (in textual form) from a MWE->Skladnica mapping output.
+outToXml :: [(T.Text, T.Text)] -> OutTree -> T.Text
+outToXml atts = renderXml . rootToXml atts . cleanUp . fromOut
+
+
+-- -- | Like `outToXml` but gives utf8 encoded bytestring.
+-- outToXml' :: OutTree -> BS.ByteString
+-- outToXml' = renderXml' . mweTreeXml . cleanUp . fromOut
