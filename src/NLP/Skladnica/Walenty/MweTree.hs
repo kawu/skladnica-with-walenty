@@ -23,28 +23,36 @@ module NLP.Skladnica.Walenty.MweTree
 , rootToXml
 , mweTreeXml
 , renderXml
--- , renderXml'
+
+-- * Parsing
+, readTop
+, parseTop
 
 -- * Utils
 , outToXml
--- , outToXml'
+, parseAndPrint
 ) where
 
 
-import           Control.Monad      (msum)
+import           Control.Applicative ((<|>))
+import qualified Control.Arrow       as Arr
+import           Control.Monad       (msum)
 
--- import qualified Data.ByteString    as BS
-import qualified Data.Map.Strict    as M
-import qualified Data.Set           as S
-import qualified Data.Text          as T
--- import qualified Data.Text.Encoding as T
-import qualified Data.Tree          as R
+import qualified Data.Foldable       as F
+import qualified Data.Map.Strict     as M
+import qualified Data.Set            as S
+import qualified Data.Text           as T
+import qualified Data.Text.IO        as T
+import qualified Data.Text.Lazy      as L
+import qualified Data.Text.Lazy.IO   as L
+import qualified Data.Tree           as R
 
-import qualified Text.HTML.TagSoup  as Tag
-import qualified Text.XML.PolySoup  as Poly
+import qualified Text.HTML.TagSoup   as Tag
+import           Text.XML.PolySoup   hiding (P, Q, XmlForest, XmlTree)
+import qualified Text.XML.PolySoup   as Poly
 
-import qualified NLP.Skladnica      as Skl
-import qualified NLP.Walenty.Types  as W
+import qualified NLP.Skladnica       as Skl
+import qualified NLP.Walenty.Types   as W
 
 
 --------------------------------------------------------------------------------
@@ -123,7 +131,9 @@ mweTreeXml root@R.Node{..} = R.Node
   , R.subForest =
       labelXml (Skl.label nodeLabel) ++
       mweForest ++
-      [childrenTree]
+      case subForest of
+        [] -> []
+        _ -> [childrenTree]
   }
   where
     nodeLabel = Skl.nodeLabel . sklNode $ rootLabel
@@ -199,12 +209,12 @@ leaf name atts = R.Node (Tag.TagOpen name atts) []
 atom' :: T.Text -> T.Text -> XmlTree
 atom' name val = R.Node
   { R.rootLabel = Tag.TagOpen name []
-  , R.subForest = [text val] }
+  , R.subForest = [textLeaf val] }
 
 
 -- | Textual leaf.
-text :: T.Text -> XmlTree
-text x = R.Node (Tag.TagText x) []
+textLeaf :: T.Text -> XmlTree
+textLeaf x = R.Node (Tag.TagText x) []
 
 
 -- -- | Convert a `Skl.Node` to an XML tree.
@@ -225,8 +235,125 @@ renderXml = Tag.renderTags . Poly.renderTree
 
 
 ------------------------------------------------------------------------------
+-- Parsing from XML
+--------------------------------------------------------------------------------
+
+
+-- | Parsing predicates.
+type P a = Poly.P (Poly.XmlTree L.Text) a
+type Q a = Poly.Q (Poly.XmlTree L.Text) a
+
+
+-- | Top-level parser
+topP :: P [MweTree]
+topP = every' topTreeQ
+
+
+-- | Tree parser
+topTreeQ :: Q MweTree
+topTreeQ = named "tree" `joinR` first treeQ
+
+
+-- | (Sub)tree parser
+treeQ :: Q MweTree
+treeQ = nodeQ <|> leafQ
+
+
+-- | Internal node parser
+nodeQ :: Q MweTree
+nodeQ =
+  (named "node" *> ((,) <$> attr "nid" <*> attr "head")) `join`
+    \(nidStr, headStr) -> do
+      cat <- first catQ
+      morph <- first morphQ
+      children <- first childrenQ
+      let edge = Skl.Edge
+            { Skl.edgeLabel = edgeLabel
+            , Skl.nodeLabel = nodeLabel }
+          edgeLabel = case headStr of
+            "yes" -> Skl.HeadYes
+            _ -> Skl.HeadNo
+          nodeLabel = Skl.Node
+            { Skl.nid = read (L.unpack nidStr)
+            , Skl.chosen = True -- whatever...
+            , Skl.label = Left $ Skl.NonTerm cat morph
+            , Skl.children = [] -- whatever...
+            }
+      return $ R.Node
+        { R.rootLabel = MweNode {sklNode = edge, mweSet = S.empty}
+        , R.subForest = children }
+
+
+-- | Category parser
+catQ :: Q T.Text
+-- catQ = named "cat" `joinR` first (node text)
+catQ = atomQ "cat"
+
+
+-- | Morphosyntactic parser
+morphQ :: Q (M.Map T.Text T.Text)
+morphQ =
+  let toStrict = Arr.first L.toStrict . Arr.second L.toStrict
+  in  M.fromList . fmap toStrict <$> node (named "morph" *> atts)
+
+
+-- | Children parser
+childrenQ :: Q [MweTree]
+childrenQ = named "children" `joinR` every' treeQ
+
+
+-- | Leaf node parser
+leafQ :: Q MweTree
+leafQ =
+  (named "leaf" *> ((,) <$> attr "nid" <*> attr "head")) `join`
+  \(nidStr, headStr) -> do
+    orth <- first $ atomQ "orth"
+    base <- first $ atomQ "base"
+    tag <- first $ atomQ "tag"
+    let edge = Skl.Edge
+          { Skl.edgeLabel = edgeLabel
+          , Skl.nodeLabel = nodeLabel }
+        edgeLabel = case headStr of
+          "yes" -> Skl.HeadYes
+          _ -> Skl.HeadNo
+        nodeLabel = Skl.Node
+          { Skl.nid = read (L.unpack nidStr)
+          , Skl.chosen = True -- whatever...
+          , Skl.label = Right $ Skl.Term orth base tag
+          , Skl.children = [] -- whatever...
+          }
+    return $ R.Node
+      { R.rootLabel = MweNode {sklNode = edge, mweSet = S.empty}
+      , R.subForest = [] }
+
+
+-- | Atomic value parser
+atomQ :: L.Text -> Q T.Text
+atomQ name = L.toStrict <$> named name `joinR` first (node text)
+
+
+-- | Parse an XML string into a sequence of `MweTree`s.
+parseTop :: L.Text -> [MweTree]
+parseTop =
+    F.concat . evalP topP . parseForest . Tag.parseTags
+
+
+-- | Read an XML file into a sequence of `MweTree`s.
+readTop :: FilePath -> IO [MweTree]
+readTop path = parseTop <$> L.readFile path
+
+
+------------------------------------------------------------------------------
 -- Utils
 --------------------------------------------------------------------------------
+
+
+-- | Functions which just parses and prints the given XML file
+-- with MWE-marked trees.
+parseAndPrint :: FilePath -> IO ()
+parseAndPrint path = do
+  mweTrees <- readTop path
+  mapM_ (T.putStrLn . renderXml . rootToXml []) mweTrees
 
 
 -- | A function which combines several lower-level functions and produces an XML

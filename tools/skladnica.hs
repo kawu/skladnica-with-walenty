@@ -16,7 +16,8 @@ import qualified Data.Char as C
 -- import qualified NLP.Partage4Xmg.Select as S
 
 
-import qualified NLP.Skladnica.Extract as E
+import qualified NLP.Skladnica.Map as Mapping
+import qualified NLP.Skladnica.Walenty.MweTree as MweTree
 
 
 --------------------------------------------------
@@ -25,11 +26,10 @@ import qualified NLP.Skladnica.Extract as E
 
 
 data Command
-    = Map E.MapCfg
-    -- ^ MWE -> Skladnica mapping
-
---     | Parse FilePath
---     -- ^ Only parse and show the input grammar
+    = Map Mapping.MapCfg
+      -- ^ MWE to Skladnica mapping
+    | Parse FilePath
+      -- ^ Only parse and show the input XML file
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -42,8 +42,8 @@ data Command
 --     _           -> B.Auto
 
 
-mapCfgParser :: Parser E.MapCfg
-mapCfgParser = E.MapCfg
+mapCfgParser :: Parser Mapping.MapCfg
+mapCfgParser = Mapping.MapCfg
   <$> strOption
         ( long "skladnica"
        <> short 's'
@@ -107,22 +107,22 @@ mapCfgParser = E.MapCfg
 --     <> short 'g'
 --     <> metavar "FILE"
 --     <> help "Grammar .xml file" )
--- 
--- 
--- --------------------------------------------------
--- -- Lexicon options
--- --------------------------------------------------
--- 
--- 
--- lexicOptions :: Parser Command
--- lexicOptions = Lexicon
---   <$> strOption
---      ( long "lexicon"
---     <> short 'l'
---     <> metavar "FILE"
---     <> help "Lexicon .xml file" )
--- 
--- 
+
+
+--------------------------------------------------
+-- Lexicon options
+--------------------------------------------------
+
+
+parseOptions :: Parser Command
+parseOptions = Parse
+  <$> strOption
+     ( long "treebank"
+    <> short 't'
+    <> metavar "FILE"
+    <> help "Treebank .xml file" )
+
+
 -- --------------------------------------------------
 -- -- Generation options
 -- --------------------------------------------------
@@ -255,10 +255,10 @@ opts = subparser
             (info (helper <*> (Map <$> mapCfgParser))
                 (progDesc "Map MWEs on Składnica")
                 )
---         <> command "parse"
---             (info (helper <*> parseOptions)
---                 (progDesc "Parse the input grammar file")
---                 )
+        <> command "parse"
+            (info (helper <*> parseOptions)
+                (progDesc "Parse the input treebank XML file")
+                )
 --         <> command "trees"
 --             (info (helper <*> (Trees <$> buildDataParser))
 --                 (progDesc "Show elementary trees, no FSs")
@@ -306,7 +306,8 @@ opts = subparser
 run :: Command -> IO ()
 run cmd =
   case cmd of
-    Map cfg -> E.mapMWEs cfg
+    Map cfg -> Mapping.mapMWEs cfg
+    Parse path -> MweTree.parseAndPrint path
 
 --          Trees buildData ->
 --             B.printTrees buildData

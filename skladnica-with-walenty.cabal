@@ -43,7 +43,7 @@ library
 
     exposed-modules:
         NLP.Skladnica.Walenty
-      , NLP.Skladnica.Extract
+      , NLP.Skladnica.Map
       , NLP.Skladnica.Walenty.Search
       , NLP.Skladnica.Walenty.Prune
       , NLP.Skladnica.Walenty.Grammar
