@@ -37,6 +37,8 @@ library
       , random              >= 1.1      && < 1.2
       , nkjp                >= 0.5      && < 0.6
       , data-named          >= 0.6      && < 0.7
+      , tagsoup             >= 0.13.4   && < 0.15
+      , polysoup            >= 0.6      && < 0.7
 
     exposed-modules:
         NLP.Skladnica.Walenty
@@ -48,6 +50,7 @@ library
       , NLP.Skladnica.Walenty.Sejf
       , NLP.Skladnica.Walenty.NcpNEs
       , NLP.Skladnica.Walenty.Search2
+      , NLP.Skladnica.Walenty.MweTree
       , NLP.Skladnica.Walenty.Mapping
 
     ghc-options: -Wall

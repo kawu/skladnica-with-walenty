@@ -20,6 +20,7 @@ import           Data.Either                   (lefts)
 import           Data.Maybe                    (mapMaybe)
 import qualified Data.Set                      as S
 import           Data.Tree                     as R
+import qualified Data.Text.IO                  as T
 import           Data.Text                     (Text)
 
 import qualified System.FilePath.Find          as F
@@ -33,6 +34,7 @@ import qualified NLP.Skladnica.Walenty.Mapping as Mapping
 -- import qualified NLP.Skladnica.Walenty.Select  as Select
 import qualified NLP.Skladnica.Walenty.Sejf    as Sejf
 import qualified NLP.Skladnica.Walenty.NcpNEs  as NE
+import qualified NLP.Skladnica.Walenty.MweTree as MWE
 
 
 ------------------------------------------------------------------------------
@@ -62,16 +64,16 @@ mapMWEs
 mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   -- read *lexicalized* verbal entries from Walenty
   walenty <- readWalenty walentyPath expansionPath
-  putStr "Number of lexical entries: " >> print (length walenty)
+--   putStr "Number of lexical entries: " >> print (length walenty)
   -- read SEJF dictionary
   sejf0 <- Sejf.readSejf sejfPath
   let sejf = sejfPartition Sejf.orth sejf0
   -- read NCP-NEs dictionary
   nes0 <- nubOrd <$> NE.nesInCorpus ncpPath
   let nes = sejfPartition id nes0
-  putStrLn $ "===== NEs ===== "
-  forM_ nes $ \ne -> print ne
-  putStrLn $ "===== NEs END ===== "
+--   putStrLn $ "===== NEs ===== "
+--   forM_ nes $ \ne -> print ne
+--   putStrLn $ "===== NEs END ===== "
   -- find all XML files
   xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
@@ -79,7 +81,8 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   where
     -- procPath walenty sejf0 nes0 skladnicaXML = do
     procPath walenty sejf0 nes0 skladnicaXML = do
-      putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
+      -- putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
+      putStr "<tree>"
       sklForest <- forestFromXml skladnicaXML
       let sentSet = case sklForest of
             sklTree : _ -> S.fromList $
@@ -101,15 +104,17 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
 --       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
         let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
-            label edge = case Skl.label (Skl.nodeLabel edge) of
-              Left nt -> (nid, Skl.cat nt)
-              Right t -> (nid, Skl.orth t)
-              where nid = Skl.nid (Skl.nodeLabel edge)
-            mwe idSet
-              | S.null idSet = ""
-              | otherwise = "MWE: " ++ show idSet
-            showNode (edge, idSet) = show (label edge, mwe idSet)
-        putStrLn . R.drawTree . fmap showNode $ mweTree
+        T.putStr . MWE.renderXml . MWE.mweTreeXml . MWE.fromOut $ mweTree
+      putStrLn "</tree>"
+--             label edge = case Skl.label (Skl.nodeLabel edge) of
+--               Left nt -> (nid, Skl.cat nt)
+--               Right t -> (nid, Skl.orth t)
+--               where nid = Skl.nid (Skl.nodeLabel edge)
+--             mwe idSet
+--               | S.null idSet = ""
+--               | otherwise = "MWE: " ++ show idSet
+--             showNode (edge, idSet) = show (label edge, mwe idSet)
+--         putStrLn . R.drawTree . fmap showNode $ mweTree
 
 
 ------------------------------------------------------------------------------
