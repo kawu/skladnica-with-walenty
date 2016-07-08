@@ -1,1 +1,1 @@
-unbuffer ./tmp/test2 | while read -r line ; do xmllint --format - <<< $line ; done | grep -v "<?xml version=\"1.0\"?>"
+unbuffer ./tmp/test2 | while read -r line ; do xmllint --encode UTF-8 --format - <<< $line ; done | grep -v "<?xml version"
