@@ -13,5 +13,5 @@ main = do
     "./data/walenty/expand.txt"
 
     "./data/sejf/SEJF-1.1-dlcf.dic"
-    -- "./data/nkjp-small"
-    "./data/nkjp-annex"
+    "./data/nkjp-small"
+    -- "./data/nkjp-annex"
