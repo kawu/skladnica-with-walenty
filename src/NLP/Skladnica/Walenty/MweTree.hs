@@ -162,20 +162,20 @@ mweSetXml tree s
 mweXml :: MweTree -> Skl.NID -> XmlTree
 mweXml tree nid = leaf "lex"
   [ ("nid", T.pack (show nid))
-  , ("base", maybe "???" id
-             $ findBase nid tree) ]
+  , ("orth", maybe "???" id
+             $ findTerm Skl.orth nid tree) ]
 
 
 -- | Find base form corresponding to the given node ID.
-findBase :: Skl.NID -> MweTree -> Maybe T.Text
-findBase i R.Node{..}
-  | i == nodeNid = nodeBase
-  | otherwise = msum $ map (findBase i) subForest
+findTerm :: (Skl.Term -> T.Text) -> Skl.NID -> MweTree -> Maybe T.Text
+findTerm p i R.Node{..}
+  | i == nid = value
+  | otherwise = msum $ map (findTerm p i) subForest
   where
-    nodeNid = Skl.nid nodeLabel
-    nodeLabel = Skl.nodeLabel . sklNode $ rootLabel
-    nodeBase = case Skl.label nodeLabel of
-      Right Skl.Term{..} -> Just base
+    nid = Skl.nid label
+    label = Skl.nodeLabel . sklNode $ rootLabel
+    value = case Skl.label label of
+      Right term -> Just (p term)
       _ -> Nothing
 
 
@@ -218,11 +218,6 @@ renderXml :: XmlTree -> T.Text
 renderXml = Tag.renderTags . Poly.renderTree
 
 
--- -- | Like `renderXml` but gives utf8 encoded bytestring.
--- renderXml' :: XmlTree -> BS.ByteString
--- renderXml' = Tag.renderTags . map (fmap T.encodeUtf8) . Poly.renderTree
-
-
 ------------------------------------------------------------------------------
 -- Utils
 --------------------------------------------------------------------------------
@@ -230,10 +225,5 @@ renderXml = Tag.renderTags . Poly.renderTree
 
 -- | A function which combines several lower-level functions and produces an XML
 -- tree (in textual form) from a MWE->Skladnica mapping output.
-outToXml :: [(T.Text, T.Text)] -> OutTree -> T.Text
-outToXml atts = renderXml . rootToXml atts . cleanUp . fromOut
-
-
--- -- | Like `outToXml` but gives utf8 encoded bytestring.
--- outToXml' :: OutTree -> BS.ByteString
--- outToXml' = renderXml' . mweTreeXml . cleanUp . fromOut
+outToXml :: [(T.Text, T.Text)] -> OutTree -> XmlTree
+outToXml atts = rootToXml atts . cleanUp . fromOut

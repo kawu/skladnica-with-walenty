@@ -105,8 +105,8 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
 --       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
         let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
-        -- BS.putStr $ MWE.outToXml' mweTree
-        T.putStrLn $ MWE.outToXml [("file", T.pack skladnicaXML)] mweTree
+        T.putStrLn . MWE.renderXml $
+          MWE.outToXml [("file", T.pack skladnicaXML)] mweTree
       -- putStrLn "</tree>"
 --             label edge = case Skl.label (Skl.nodeLabel edge) of
 --               Left nt -> (nid, Skl.cat nt)
