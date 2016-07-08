@@ -12,6 +12,7 @@ module NLP.Skladnica.Walenty.MweTree
   MweTree
 , MweNode (..)
 , cleanUp
+, emboss
 
 -- * Conversion
 , OutTree
@@ -34,7 +35,7 @@ module NLP.Skladnica.Walenty.MweTree
 ) where
 
 
-import           Control.Applicative ((<|>))
+import           Control.Applicative ((<|>), optional)
 import qualified Control.Arrow       as Arr
 import           Control.Monad       (msum)
 
@@ -74,6 +75,21 @@ data MweNode = MweNode
   } deriving (Show, Eq, Ord)
 
 
+-- | Retrieve ID of the root node.
+getRootID :: MweTree -> Skl.NID
+getRootID =
+  Skl.nid . Skl.nodeLabel . sklNode . R.rootLabel
+
+
+-- | Mark the given node as a head.
+markAsHead :: MweNode -> MweNode
+markAsHead n =
+  let newNode = Skl.modifyEdge
+        (const Skl.HeadYes)
+        (sklNode n)
+  in  n {sklNode = newNode}
+
+
 -- | Remove outer MWE annotations if identical, directly embedded MWE
 -- annotations exist. In other words, if a parent node `n` has the same MWE
 -- annotation as its child node `m`, we clean it (set to the empty set).
@@ -87,6 +103,27 @@ cleanUp R.Node{..} = R.Node
       | mweSet rootLabel `elem` childrenMweSets =
           rootLabel {mweSet = S.empty}
       | otherwise = rootLabel
+
+
+-- | Mark the paths leading from MWE roots to the corresponding leaves, by
+-- changing the values of `Skl.IsHead` to `Skl.HeadYes`.
+emboss :: MweTree -> MweTree
+emboss R.Node{..} = R.Node
+  { R.rootLabel = rootLabel
+  , R.subForest = mark (map emboss subForest) }
+  where
+    mark
+      | S.null (mweSet rootLabel) = id
+      | otherwise = map $ fst . go (mweSet rootLabel)
+    go mweIDs t
+      | or found || getRootID t `S.member` mweIDs =
+          ( t { R.rootLabel = markAsHead (R.rootLabel t)
+              , R.subForest = children }
+          , True )
+      | otherwise = (t, False)
+      where
+        pairs = map (go mweIDs) (R.subForest t)
+        (children, found) = unzip pairs
 
 
 ------------------------------------------------------------------------------
@@ -267,6 +304,7 @@ nodeQ =
       cat <- first catQ
       morph <- first morphQ
       children <- first childrenQ
+      mwes <- optional $ first mwesQ
       let edge = Skl.Edge
             { Skl.edgeLabel = edgeLabel
             , Skl.nodeLabel = nodeLabel }
@@ -280,8 +318,20 @@ nodeQ =
             , Skl.children = [] -- whatever...
             }
       return $ R.Node
-        { R.rootLabel = MweNode {sklNode = edge, mweSet = S.empty}
+        { R.rootLabel = MweNode
+          { sklNode = edge
+          , mweSet = maybe S.empty id mwes }
         , R.subForest = children }
+
+
+-- | MWE set parser.
+mwesQ :: Q (S.Set Skl.NID)
+mwesQ = S.fromList <$> named "mwe" `joinR` every' mweQ
+
+
+-- | Single MWE parser.
+mweQ :: Q Skl.NID
+mweQ = node $ named "lex" *> (read . L.unpack <$> attr "nid")
 
 
 -- | Category parser
@@ -349,10 +399,11 @@ readTop path = parseTop <$> L.readFile path
 
 
 -- | Functions which just parses and prints the given XML file
--- with MWE-marked trees.
-parseAndPrint :: FilePath -> IO ()
-parseAndPrint path = do
-  mweTrees <- readTop path
+-- with MWE-marked trees.  It takes a single argument which
+-- allows to modify the individual MWE trees.
+parseAndPrint :: (MweTree -> MweTree) -> FilePath -> IO ()
+parseAndPrint f path = do
+  mweTrees <- map f <$> readTop path
   mapM_ (T.putStrLn . renderXml . rootToXml []) mweTrees
 
 

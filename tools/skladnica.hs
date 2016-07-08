@@ -30,6 +30,8 @@ data Command
       -- ^ MWE to Skladnica mapping
     | Parse FilePath
       -- ^ Only parse and show the input XML file
+    | Emboss FilePath
+      -- ^ Mark MWEs as heads
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -42,8 +44,8 @@ data Command
 --     _           -> B.Auto
 
 
-mapCfgParser :: Parser Mapping.MapCfg
-mapCfgParser = Mapping.MapCfg
+mapCfgOptions :: Parser Mapping.MapCfg
+mapCfgOptions = Mapping.MapCfg
   <$> strOption
         ( long "skladnica"
        <> short 's'
@@ -86,36 +88,19 @@ mapCfgParser = Mapping.MapCfg
 --   <*> (not <$> switch
 --           ( long "no-subtree-sharing"
 --          <> short 'n' ))
--- 
--- 
--- 
--- buildOptions :: Parser (B.BuildData, B.BuildCfg)
--- buildOptions = (,)
---     <$> buildDataParser
---     <*> buildCfgParser
--- 
--- 
--- --------------------------------------------------
--- -- Parse options
--- --------------------------------------------------
--- 
--- 
--- parseOptions :: Parser Command
--- parseOptions = Parse
---   <$> strOption
---      ( long "grammar"
---     <> short 'g'
---     <> metavar "FILE"
---     <> help "Grammar .xml file" )
-
-
---------------------------------------------------
--- Lexicon options
---------------------------------------------------
 
 
 parseOptions :: Parser Command
 parseOptions = Parse
+  <$> strOption
+     ( long "treebank"
+    <> short 't'
+    <> metavar "FILE"
+    <> help "Treebank .xml file" )
+
+
+embossOptions :: Parser Command
+embossOptions = Emboss
   <$> strOption
      ( long "treebank"
     <> short 't'
@@ -252,11 +237,15 @@ parseOptions = Parse
 opts :: Parser Command
 opts = subparser
         ( command "map"
-            (info (helper <*> (Map <$> mapCfgParser))
+            (info (helper <*> (Map <$> mapCfgOptions))
                 (progDesc "Map MWEs on Składnica")
                 )
         <> command "parse"
             (info (helper <*> parseOptions)
+                (progDesc "Parse the input treebank XML file")
+                )
+        <> command "emboss"
+            (info (helper <*> embossOptions)
                 (progDesc "Parse the input treebank XML file")
                 )
 --         <> command "trees"
@@ -307,7 +296,8 @@ run :: Command -> IO ()
 run cmd =
   case cmd of
     Map cfg -> Mapping.mapMWEs cfg
-    Parse path -> MweTree.parseAndPrint path
+    Parse path -> MweTree.parseAndPrint id path
+    Emboss path -> MweTree.parseAndPrint MweTree.emboss path
 
 --          Trees buildData ->
 --             B.printTrees buildData
