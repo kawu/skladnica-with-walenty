@@ -29,6 +29,7 @@ import qualified NLP.Walenty                   as W
 
 import qualified NLP.Skladnica.Walenty.Prune   as P
 import qualified NLP.Skladnica.Walenty.Search2 as Q
+import qualified NLP.Skladnica.Walenty.Mapping as Mapping
 -- import qualified NLP.Skladnica.Walenty.Select  as Select
 import qualified NLP.Skladnica.Walenty.Sejf    as Sejf
 import qualified NLP.Skladnica.Walenty.NcpNEs  as NE
@@ -82,7 +83,7 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
       sklForest <- forestFromXml skladnicaXML
       let sentSet = case sklForest of
             sklTree : _ -> S.fromList $
-              map Skl.orth (Q.terminals sklTree)
+              map Skl.orth (Mapping.terminals sklTree)
             _ -> S.empty
           sejf =
             [ entry
@@ -92,14 +93,14 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
             [ entry
             | (entry, wordSet) <- nes0
             , wordSet `S.isSubsetOf` sentSet ]
-      let exprs1 = map Q.querify walenty
+      let exprs1 = map Mapping.querify walenty
           exprs2 = map (Sejf.querify' Sejf.IgnoreCase) sejf
           exprs3 = map (Sejf.querifyOrth' Sejf.CaseSensitive) nes
 --       E.lift $ putStrLn $ "Size of the sentSet: " ++ show (S.size sentSet)
 --       E.lift $ putStrLn $ "Relevant SEJF expressions: " ++ show sejf
 --       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
-        let mweTree = Q.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
+        let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
             label edge = case Skl.label (Skl.nodeLabel edge) of
               Left nt -> (nid, Skl.cat nt)
               Right t -> (nid, Skl.orth t)

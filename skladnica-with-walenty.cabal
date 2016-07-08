@@ -48,6 +48,7 @@ library
       , NLP.Skladnica.Walenty.Sejf
       , NLP.Skladnica.Walenty.NcpNEs
       , NLP.Skladnica.Walenty.Search2
+      , NLP.Skladnica.Walenty.Mapping
 
     ghc-options: -Wall
 

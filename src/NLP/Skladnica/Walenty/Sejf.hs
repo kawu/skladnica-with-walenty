@@ -35,6 +35,7 @@ import qualified Data.Tree                     as R
 import qualified NLP.Skladnica                 as S
 import qualified NLP.Skladnica.Walenty.Search  as E
 import qualified NLP.Skladnica.Walenty.Search2 as E2
+import qualified NLP.Skladnica.Walenty.Mapping as Map
 
 -- import Debug.Trace (trace)
 
@@ -114,12 +115,12 @@ querifyOrth caseSens orth = E.andQ
 -- | Check if the head terminal has the corresponding tag
 -- and if every part of the `orth` form is present in terminal
 -- leaves.
-querify' :: CaseSensitivity -> SejfEntry -> E2.Expr E2.Edge 'E2.Tree
+querify' :: CaseSensitivity -> SejfEntry -> E2.Expr Map.Edge 'E2.Tree
 querify' caseSens = querifyOrth' caseSens . orth
 
 
 -- | Generalized querify based on the orthographic form only.
-querifyOrth' :: CaseSensitivity -> Text -> E2.Expr E2.Edge 'E2.Tree
+querifyOrth' :: CaseSensitivity -> Text -> E2.Expr Map.Edge 'E2.Tree
 querifyOrth' caseSens orth = E2.andQ
   [ checkTrunk
   , E2.ifThenElse checkLeaves markLeaves (E2.B False)
@@ -134,14 +135,14 @@ querifyOrth' caseSens orth = E2.andQ
       `isInfixOf`
       map withCase (leaves t)
       where
-        leaves = map S.orth . E2.terminals
+        leaves = map S.orth . Map.terminals
     -- check that at leat one of the MWE componenets is on the trunk.
-    checkTrunk = E2.trunk . E2.hasOrth $ \word ->
+    checkTrunk = Map.trunk . Map.hasOrth $ \word ->
       withCase word `elem` casedOrthParts
     -- TODO: note that `markLeaves` can mark more than identified
     -- with `checkLeaves`!
     markLeaves = E2.andQ
-      [ E2.anyAncestor . E2.hasOrth $ \word ->
+      [ E2.anyAncestor . Map.hasOrth $ \word ->
           withCase word == casedForm
       | casedForm <- casedOrthParts ]
     -- take into account case sensitivity
@@ -229,18 +230,3 @@ splitWith sep esc =
     other t0 = do
       (char, t) <- T.uncons t0
       first (T.cons char) <$> go t
-
-
--- -- | Split the entry on the first comma separator.
--- -- Take into account potential escaped commas.
--- splitEntry :: Char -> String -> (String, String)
--- splitEntry sep =
---   go
---   where
---     go xs = case xs of
---       '\\' : spec : ys -> first (spec :) (go ys)
---       x : ys -> if x == sep
---         then ("", ys)
---         else first (x:) (go ys)
---       [] -> error "splitEntry.go: no comma separator?"
-
