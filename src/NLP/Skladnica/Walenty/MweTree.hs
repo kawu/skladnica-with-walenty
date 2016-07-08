@@ -123,16 +123,22 @@ mweTreeXml root@R.Node{..} = R.Node
   , R.subForest =
       labelXml (Skl.label nodeLabel) ++
       mweForest ++
-      map mweTreeXml subForest }
+      [childrenTree]
+  }
   where
     nodeLabel = Skl.nodeLabel . sklNode $ rootLabel
     nodeType = case Skl.label nodeLabel of
       Left _nonTerm -> "node"
       Right _term -> "leaf"
+    atts = [("nid", nodeNid), ("head", nodeHead)]
     nodeNid = T.pack . show . Skl.nid $ nodeLabel
-    -- atts = [("nid", nodeNid), ("type", nodeType)]
-    atts = [("nid", nodeNid)]
+    nodeHead = case Skl.edgeLabel (sklNode rootLabel) of
+      Skl.HeadYes -> "yes"
+      Skl.HeadNo -> "no"
     mweForest = mweSetXml root . mweSet $ rootLabel
+    childrenTree = R.Node
+      { R.rootLabel = Tag.TagOpen "children" []
+      , R.subForest = map mweTreeXml subForest }
 
 
 -- | Convert a node label to an XML forest containing additional information

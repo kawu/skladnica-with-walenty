@@ -10,7 +10,8 @@
 
 
 module NLP.Skladnica.Extract
-( mapMWEs
+( MapCfg (..)
+, mapMWEs
 ) where
 
 
@@ -54,36 +55,48 @@ getXmlFiles dir = do
 --------------------------------------------------------------------------------
 
 
+-- | Mapping configuration.
+data MapCfg = MapCfg
+  { skladnicaDir :: FilePath
+  , mayWalentyPath :: Maybe (FilePath, FilePath)
+    -- ^ The first component is the Walenty file, the second one
+    -- is the expansion file
+  , maySejfPath :: Maybe FilePath
+  , mayNcpPath :: Maybe FilePath
+  } deriving (Show, Eq, Ord)
+
+
 -- | Map individual MWEs on Składnica and print the resulting trees on stdin.
+-- mapMWEs
+--   :: FilePath -- ^ Skladnica directory
+--   -> FilePath -- ^ Walenty file
+--   -> FilePath -- ^ Walenty expansion file
+--   -> FilePath -- ^ SEJF file
+--   -> FilePath -- ^ NCP directory (for NEs)
+--   -> IO ()
 mapMWEs
-  :: FilePath -- ^ Skladnica directory
-  -> FilePath -- ^ Walenty file
-  -> FilePath -- ^ Walenty expansion file
-  -> FilePath -- ^ SEJF file
-  -> FilePath -- ^ NCP directory (for NEs)
+  :: MapCfg
   -> IO ()
-mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
+mapMWEs MapCfg{..} = do
   -- read *lexicalized* verbal entries from Walenty
-  walenty <- readWalenty walentyPath expansionPath
---   putStr "Number of lexical entries: " >> print (length walenty)
+  walenty <- case mayWalentyPath of
+    Just paths -> uncurry readWalenty paths
+    Nothing -> return []
   -- read SEJF dictionary
-  sejf0 <- Sejf.readSejf sejfPath
+  sejf0 <- case maySejfPath of
+    Just sejfPath -> Sejf.readSejf sejfPath
+    Nothing -> return []
   let sejf = sejfPartition Sejf.orth sejf0
   -- read NCP-NEs dictionary
-  nes0 <- nubOrd <$> NE.nesInCorpus ncpPath
+  nes0 <- nubOrd <$> case mayNcpPath of
+    Just ncpPath -> NE.nesInCorpus ncpPath
+    Nothing -> return []
   let nes = sejfPartition id nes0
---   putStrLn $ "===== NEs ===== "
---   forM_ nes $ \ne -> print ne
---   putStrLn $ "===== NEs END ===== "
-  -- find all XML files
-  xmlFiles <- getXmlFiles skladnicaDir
   -- per each XML file...
+  xmlFiles <- getXmlFiles skladnicaDir
   forM_ xmlFiles (procPath walenty sejf nes)
   where
-    -- procPath walenty sejf0 nes0 skladnicaXML = do
     procPath walenty sejf0 nes0 skladnicaXML = do
-      -- putStrLn $ ">>> " ++ skladnicaXML ++ " <<<"
-      -- putStr "<tree>"
       sklForest <- forestFromXml skladnicaXML
       let sentSet = case sklForest of
             sklTree : _ -> S.fromList $
@@ -100,23 +113,11 @@ mapMWEs skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
       let exprs1 = map Mapping.querify walenty
           exprs2 = map (Sejf.querify' Sejf.IgnoreCase) sejf
           exprs3 = map (Sejf.querifyOrth' Sejf.CaseSensitive) nes
---       E.lift $ putStrLn $ "Size of the sentSet: " ++ show (S.size sentSet)
---       E.lift $ putStrLn $ "Relevant SEJF expressions: " ++ show sejf
---       E.lift $ putStrLn $ "Relevant NES: " ++ show nes
       forM_ sklForest $ \sklTree -> do
         let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
         T.putStrLn . MWE.renderXml $
-          MWE.outToXml [("file", T.pack skladnicaXML)] mweTree
-      -- putStrLn "</tree>"
---             label edge = case Skl.label (Skl.nodeLabel edge) of
---               Left nt -> (nid, Skl.cat nt)
---               Right t -> (nid, Skl.orth t)
---               where nid = Skl.nid (Skl.nodeLabel edge)
---             mwe idSet
---               | S.null idSet = ""
---               | otherwise = "MWE: " ++ show idSet
---             showNode (edge, idSet) = show (label edge, mwe idSet)
---         putStrLn . R.drawTree . fmap showNode $ mweTree
+          let path = drop (length skladnicaDir) skladnicaXML
+          in  MWE.outToXml [("file", T.pack path)] mweTree
 
 
 ------------------------------------------------------------------------------
