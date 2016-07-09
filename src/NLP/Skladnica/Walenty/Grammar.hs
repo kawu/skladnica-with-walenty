@@ -28,6 +28,7 @@ import qualified Data.Tree                    as R
 -- NLP.Partage.DAG: for Ord R.Tree instance
 import           NLP.Partage.DAG              ()
 import qualified NLP.Partage.Tree.Other       as O
+import qualified NLP.Partage.AStar.Deriv      as D
 
 import qualified NLP.Skladnica                as S
 import qualified NLP.Walenty.Types            as W
@@ -230,6 +231,8 @@ shatter r
       children' <- fst <$> go rootNT left (R.subForest r)
       return $ R.Node (O.NonTerm $ S.cat rootNT) children'
   where
+    -- returning, on the second position, the closest
+    -- right-neighbouring trunk non-terminal
     go rootNT [] [] = return ([], Parent rootNT)
     go rootNT (left:lefts) (child:children) = do
       let (childLab, childStat) = R.rootLabel child
@@ -293,6 +296,94 @@ cleanGrammar =
            then child
            else tree {R.subForest = [child]}
       xs -> tree {R.subForest = map cleanET xs}
+
+
+-------------------------------------------------
+-- Grammar extraction
+-------------------------------------------------
+
+
+-- -- | A TAG derivation tree.
+-- type Deriv = D.Deriv Text Text
+-- 
+-- 
+-- -- -- | Store the ET in the underlying set.
+-- -- store :: ET -> E.State (S.Set ET) ()
+-- -- store = E.modify' . S.insert
+-- -- 
+-- -- 
+-- -- -- | Really, the top-level grammar extraction method.
+-- -- extractGrammar :: Q.SklTree -> S.Set ET
+-- -- extractGrammar = cleanGrammar . topShatter . prepTree . S.mapFst S.label
+-- -- 
+-- -- 
+-- -- -- | Top-level `shatter`
+-- -- topShatter :: R.Tree (S.Label, Status) -> S.Set ET
+-- -- topShatter =
+-- --   let doit x = shatter x >>= store
+-- --   in  flip E.execState S.empty . doit
+-- 
+-- 
+-- shatter' :: R.Tree (S.Label, Status) -> Deriv
+-- shatter' r
+--   | null (R.subForest r) =
+--       let x = getTerm' r
+--           node = D.DerivNode (O.Term x) []
+--       in  R.Node node []
+--   | otherwise =
+--       let rootNT = labelNT . fst $ R.rootLabel r
+--           childLabs = map R.rootLabel $ R.subForest r
+--           left = onLeft (Parent rootNT) childLabs
+--           (children', _, modifs) = go rootNT left $ R.subForest r
+--           node = D.DerivNode (O.NonTerm $ S.cat rootNT) (reverse modifs)
+--       in  R.Node node children'
+--   where
+--     -- returning, on the second position, the closest
+--     -- right-neighbouring trunk non-terminal; on the
+--     -- third position, modifiers of the parent
+--     go rootNT [] [] = ([], Parent rootNT, [])
+--     go rootNT (left:lefts) (child:children) =
+--       let (childLab, childStat) = R.rootLabel child
+--           (children', right, modifs) = go rootNT lefts children
+--           child' = shatter' child
+--       in  case (childLab, childStat) of
+--         (Left x, Trunk) -> (child':children', Sister x, modifs)
+--         (Right _, Trunk) -> (child':children', None, modifs)
+--         (Left x, Arg) ->
+--           let childNT = O.NonTerm $ S.cat x
+--               node = D.DerivNode childNT [child']
+--           in  (R.Node node [] : children', None, modifs)
+--         (Right _, Arg) -> error "shatter'.go: obligatory terminal argument!?"
+--         (_, Modif) -> case (left, right) of
+--           (Parent x, _) -> (children', right, leftMod' child' x : modifs)
+--           (_, Parent y) -> (children', right, rightMod' child' y : modifs)
+--           -- below, we would need to specify that `child'` is the right modifier
+--           -- of its left-neighbouring sister...
+--           (Sister x, _) -> (children', right) <$ store (child' `rightMod` x)
+-- 
+--     go _ _ _ = error "shatter'.go: different lengths of the input lists"
+-- 
+-- 
+-- -- | Construct a left modifier from a given (initial,
+-- -- but this is not checked!) derivation.
+-- leftMod' :: Deriv -> S.NonTerm -> Deriv
+-- leftMod' t nonTerm = R.Node root
+--   [t, R.Node foot []]
+--   where
+--     x = S.cat nonTerm
+--     root = D.DerivNode (O.NonTerm x) []
+--     foot = D.DerivNode (O.Foot x) []
+-- 
+-- 
+-- -- | Construct a right modifier from a given (initial,
+-- -- but this is not checked!) ET.
+-- rightMod' :: Deriv -> S.NonTerm -> Deriv
+-- rightMod' t nonTerm = R.Node root
+--   [R.Node foot [], t]
+--   where
+--     x = S.cat nonTerm
+--     root = D.DerivNode (O.NonTerm x) []
+--     foot = D.DerivNode (O.Foot x) []
 
 
 -------------------------------------------------

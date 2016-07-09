@@ -4,6 +4,7 @@
 -- import           Data.Monoid (mempty)
 import           Options.Applicative
 import qualified Data.Char as C
+-- import qualified Data.Text as T
 
 
 -- -- import qualified NLP.Partage4Xmg.Automat as A
@@ -35,6 +36,8 @@ data Command
       -- ^ Mark MWEs as heads
     | ExtractMWEs FilePath
       -- ^ Extract ETs from the input XML files and show MWE trees
+    | TestParser FilePath String
+      -- ^ Extract local grammars and parse given the start symbol
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -93,31 +96,33 @@ mapCfgOptions = Mapping.MapCfg
 --          <> short 'n' ))
 
 
-parseOptions :: Parser Command
-parseOptions = Parse
-  <$> strOption
+treebankParser :: Parser FilePath
+treebankParser = strOption
      ( long "treebank"
     <> short 't'
     <> metavar "FILE"
     <> help "Treebank .xml file" )
+
+
+parseOptions :: Parser Command
+parseOptions = Parse <$> treebankParser
 
 
 embossOptions :: Parser Command
-embossOptions = Emboss
-  <$> strOption
-     ( long "treebank"
-    <> short 't'
-    <> metavar "FILE"
-    <> help "Treebank .xml file" )
+embossOptions = Emboss <$> treebankParser
 
 
 extractMWEsOptions :: Parser Command
-extractMWEsOptions = ExtractMWEs
-  <$> strOption
-     ( long "treebank"
-    <> short 't'
-    <> metavar "FILE"
-    <> help "Treebank .xml file" )
+extractMWEsOptions = ExtractMWEs <$> treebankParser
+
+
+testParserOptions :: Parser Command
+testParserOptions = TestParser
+  <$> treebankParser
+  <*> strOption
+        ( long "start"
+          <> short 's'
+          <> help "Start symbol of the grammar" )
 
 
 -- --------------------------------------------------
@@ -264,6 +269,10 @@ opts = subparser
             (info (helper <*> extractMWEsOptions)
                 (progDesc "Extract ETs from the input XML files and show MWE trees")
                 )
+        <> command "test-parser"
+            (info (helper <*> testParserOptions)
+                (progDesc "Test parser (provisional)")
+                )
 --         <> command "trees"
 --             (info (helper <*> (Trees <$> buildDataParser))
 --                 (progDesc "Show elementary trees, no FSs")
@@ -315,6 +324,7 @@ run cmd =
     Parse path -> MweTree.parseAndPrint id path
     Emboss path -> MweTree.parseAndPrint MweTree.emboss path
     ExtractMWEs path -> Extract.extractGrammar path
+    TestParser path begSym -> Extract.testParser path begSym
 
 --          Trees buildData ->
 --             B.printTrees buildData
