@@ -15,7 +15,7 @@ module NLP.Skladnica.Extract
 ) where
 
 
-import           Control.Monad                 (forM_, when)
+import           Control.Monad                 (forM_, when, guard)
 import           Control.Monad.IO.Class        (liftIO)
 import qualified Control.Monad.State.Strict    as E
 
@@ -23,9 +23,9 @@ import qualified Control.Monad.State.Strict    as E
 import           Data.Either                   (lefts)
 import qualified Data.Foldable                 as F
 import qualified Data.Traversable              as Trav
-import           Data.List                     (minimumBy)
+import           Data.List                     (minimumBy, partition)
 import qualified Data.Map.Strict               as M
-import           Data.Maybe                    (mapMaybe)
+import           Data.Maybe                    (mapMaybe, isJust)
 import qualified Data.MemoCombinators          as Memo
 import           Data.Ord                      (comparing)
 import qualified Data.Set                      as S
@@ -144,18 +144,34 @@ extractGrammar skladnicaXML begSym0 = do
         T.putStrLn $ "# PARSING: " `T.append` T.unwords (orthForms sklTree)
         putStrLn $ "# SKLADNICA DEPENDENCY TREE:\n"
       -- reference dependency tree
-      let depTree0 = asDepTree . tokenize $ sklTree
-      liftIO $ putRose . Dep.toRose $ depTree0
+      let depTree0 = canonize . asDepTree . tokenize $ sklTree
+      liftIO $ mapM_ (putRose . Dep.toRose) (S.toList depTree0)
       -- computing the set of derivations
       hype <- liftIO $ AStar.earleyAuto auto input
       let derivList = Deriv.derivTrees hype begSym sentLen
-          derivSize = Gorn.size . Gorn.fromDeriv
-          derivTree = minimumBy (comparing derivSize) derivList
+      liftIO $ do
+        putStrLn $ "# NO. OF DERIVATIONS: " ++ show (length derivList)
+
+--       forM_ derivList $ \derivTree -> do
+--         let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derivTree
+--         liftIO $ do
+--           putRose . Deriv.deriv4show $ derivTree
+--           putRose . Dep.toRose $ depTree
+--           mapM_
+--             (putRose . Dep.toRose)
+--             (S.toList . canonize . Dep.mapDep (const ()) $ depTree)
+
+      let derivSize = Gorn.size . Gorn.fromDeriv
+          derivTree
+            = minimumBy (comparing derivSize)
+            . filter ( (==depTree0) . canonize . Dep.mapDep (const ())
+                       . Dep.fromDeriv . Gorn.fromDeriv )
+            $ derivList
           depTree = Dep.fromDeriv . Gorn.fromDeriv $ derivTree
       liftIO $ do
         putRose . Deriv.deriv4show $ derivTree
         putRose . Dep.toRose $ depTree
-
+        -- putRose . Dep.toRose . canonize . Dep.mapDep (const ()) $ depTree
 
 
 ------------------------------------------------------------------------------
@@ -179,51 +195,122 @@ tokenize =
       Right _term   -> (acc+1, Skl.modifyNode (,acc) x)
 
 
--- | Extract the dependency tree consistent with the given Składnica tree.
-asDepTree :: TokTree -> DepTree
-asDepTree root@R.Node{..} = Dep.Tree
-  { Dep.root = anchors root
-  , Dep.children = M.fromList
-    [ (asDepTree subTree, ())
-    | subTree <- subForest
-    , Skl.edgeLabel (R.rootLabel subTree) == Skl.HeadNo ]
-  }
-
-
--- asDepTree' :: TokTree -> DepTree
--- asDepTree' root@R.Node{..} =
+-- -- | Extract the dependency tree consistent with the given Składnica tree.
+-- asDepTree :: TokTree -> DepTree
+-- asDepTree R.Node{..} =
 --   join heads `addChildren` others
 --   where
 --     children =
---       [ ( asDepTree' subTree
+--       [ ( asDepTree subTree
 --         , Skl.edgeLabel (R.rootLabel subTree) )
 --       | subTree <- subForest ]
---     heads  = filter ((==Skl.HeadYes) . snd) children
---     others = filter ((==Skl.HeadNo)  . snd) children
+--     heads  = [t | (t, Skl.HeadYes) <- children]
+--     others = [t | (t, Skl.HeadNo)  <- children]
 --     join ts = Dep.Tree
---       { Dep.root = S.unions (map Dep.root ts)
+--       { Dep.root = S.unions (termsHere : map Dep.root ts)
 --       , Dep.children = M.unions (map Dep.children ts) }
 --     addChildren root ts = root
 --       { Dep.children = M.union
 --         (Dep.children root)
 --         (M.fromList [(t, ()) | t <- ts]) }
+--     nodeLabel = Skl.nodeLabel rootLabel
+--     termsHere = case Skl.label (fst nodeLabel) of
+--       Left _nonTerm -> S.empty
+--       Right term    -> S.singleton $ AStar.Tok
+--         { AStar.position = snd nodeLabel
+--         -- WARNING: below, note that we parse over base forms
+--         , AStar.terminal = Skl.base term }
 
 
--- | Find anchoring terminals for the given Składnica node.
-anchors :: TokTree -> S.Set (AStar.Tok T.Text)
-anchors R.Node{..} =
-  here `S.union` below
+-- | Extract the dependency tree consistent with the given Składnica tree.
+asDepTree :: TokTree -> DepTree
+asDepTree R.Node{..} =
+  join heads `addChildren` others
   where
+    (heads0, others0) = partition isHead subForest
+    heads  = map fst $ asDeps heads0
+    others = map fst $ asDeps others0
+    asDeps ts = [(asDepTree t, Skl.edgeLabel (R.rootLabel t)) | t <- ts]
+    join ts = Dep.Tree
+      { Dep.root = S.unions (termsHere : map Dep.root ts)
+      , Dep.children = M.unions (map Dep.children ts) }
+    addChildren root ts = root
+      { Dep.children = M.union
+        (Dep.children root)
+        (M.fromList [(t, ()) | t <- ts]) }
     nodeLabel = Skl.nodeLabel rootLabel
-    here = case Skl.label (fst nodeLabel) of
+    termsHere = case Skl.label (fst nodeLabel) of
       Left _nonTerm -> S.empty
       Right term    -> S.singleton $ AStar.Tok
         { AStar.position = snd nodeLabel
         -- WARNING: below, note that we parse over base forms
         , AStar.terminal = Skl.base term }
-    below = S.unions
-      [ anchors subTree | subTree <- subForest
-      , Skl.edgeLabel (R.rootLabel subTree) == Skl.HeadYes ]
+
+    isHead t = headYes t || fweTerm t
+    headYes t = Skl.edgeLabel (R.rootLabel t) == Skl.HeadYes
+    fweTerm fw = isJust $ do
+      fwCat <- nonTermCat fw
+      guard $ fwCat == "fw"
+      term <- child fw
+      guard $ isTerm term
+    child t = case R.subForest t of
+      [c] -> Just c
+      _ -> Nothing
+    nonTermCat t = case Skl.label . fst . Skl.nodeLabel . R.rootLabel $ t of
+      Left Skl.NonTerm{..} -> Just cat
+      _ -> Nothing
+    isTerm t = case Skl.label . fst . Skl.nodeLabel . R.rootLabel $ t of
+        Right _term -> True
+        _ -> False
+
+
+-- prepare :: SklTree -> SklTree
+-- prepare =
+--   check . Skl.purge useless
+--   where
+--     check [x] = x
+--     check xs  = error $ "prepTree: purge left " ++ show xs
+--     useless Skl.Edge{..} = case Skl.label nodeLabel of
+--       (Left Skl.NonTerm{..}) -> cat `elem` ["fw", "fl", "ff"]
+--       _ -> False
+
+
+-- | Construct a canonical form of a dependency tree.
+canonize :: DepTree -> S.Set DepTree
+canonize =
+  S.fromList . Dep.discard useless
+  where
+    useless = all (isInterp . AStar.terminal) . S.toList
+    isInterp = flip S.member interps
+    interps = S.fromList [","]
+
+
+-- -- | Extract the dependency tree consistent with the given Składnica tree.
+-- asDepTree :: TokTree -> DepTree
+-- asDepTree root@R.Node{..} = Dep.Tree
+--   { Dep.root = anchors root
+--   , Dep.children = M.fromList
+--     [ (asDepTree subTree, ())
+--     | subTree <- subForest
+--     , Skl.edgeLabel (R.rootLabel subTree) == Skl.HeadNo ]
+--   }
+--
+--
+-- -- | Find anchoring terminals for the given Składnica node.
+-- anchors :: TokTree -> S.Set (AStar.Tok T.Text)
+-- anchors R.Node{..} =
+--   here `S.union` below
+--   where
+--     nodeLabel = Skl.nodeLabel rootLabel
+--     here = case Skl.label (fst nodeLabel) of
+--       Left _nonTerm -> S.empty
+--       Right term    -> S.singleton $ AStar.Tok
+--         { AStar.position = snd nodeLabel
+--         -- WARNING: below, note that we parse over base forms
+--         , AStar.terminal = Skl.base term }
+--     below = S.unions
+--       [ anchors subTree | subTree <- subForest
+--       , Skl.edgeLabel (R.rootLabel subTree) == Skl.HeadYes ]
 
 
 ------------------------------------------------------------------------------

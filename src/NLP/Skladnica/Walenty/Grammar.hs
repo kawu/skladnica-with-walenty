@@ -35,6 +35,8 @@ import qualified NLP.Walenty.Types            as W
 
 import qualified NLP.Skladnica.Walenty.Search as Q
 
+import Debug.Trace (trace)
+
 
 -------------------------------------------------
 -- Grammar extraction -- determining the status
@@ -63,9 +65,11 @@ status xs = case xs of
   (curLab, curHead) : (parLab, parHead) : _
     | curHead == S.HeadYes &&
       parHead == S.HeadYes -> Trunk
-    | parLab `is` "fw" &&
-      hasAttrIn parLab "tfw"
-        ["sentp(że)"]    -> Trunk
+    -- UPDATE 11/07/2016: commented out; otherwise the resulting derivation is not
+    -- consistent with the Składnica depdency tree.
+--     | parLab `is` "fw" &&
+--       hasAttrIn parLab "tfw"
+--         ["sentp(że)"]    -> Trunk
     | parLab `is` "fw"   -> Arg
     | parLab `is` "fl"   -> Modif
     | curHead == S.HeadYes -> Trunk
@@ -82,11 +86,13 @@ status xs = case xs of
     -- to avoid analyzing additional conjunctions (like in the sentence
     -- "Często chodzili do pubu, pili piwo, rozmawiali.", where only one
     -- of the commas is marked as a trunk) as auxiliaries.
-    | curLab `is` "spójnik" -> Trunk
+    -- UPDATE 11/07/2016: Trunk -> Arg, otherwise the resulting derivation is not
+    -- consistent with the Składnica depdency tree.
+    | curLab `is` "spójnik" -> Arg
     | otherwise          -> Modif
   (curLab, curHead) : []
     | curHead == S.HeadYes -> Trunk
-    | otherwise          -> Modif
+    | otherwise -> Modif
   _ -> error $ "unhandled case in `status`: " ++ show xs
   where
     is (Left S.NonTerm{..}) x = x == cat
@@ -139,14 +145,28 @@ statTree trace t
            , R.subForest = subTrees }
 
 
--- | Prepare the tree for grammar extraction:
---
---   * Use `statRoot` to obtain the status of nodes
---   * `purge` redundant (e.g., "fw", "fl" and "ff") nodes
---
-prepTree
-  :: S.Tree S.Label S.IsHead
-  -> R.Tree (S.Label, Status)
+-- -- | Prepare the tree for grammar extraction:
+-- --
+-- --   * Use `statRoot` to obtain the status of nodes
+-- --   * `purge` redundant (e.g., "fw", "fl" and "ff") nodes
+-- --
+-- prepTree
+--   :: S.Tree S.Label S.IsHead
+--   -> R.Tree (S.Label, Status)
+-- prepTree
+--   = S.simplify
+--   -- . S.purge (useless . fst) isTrunkNT
+--   . S.purge useless isTrunkNT
+--   . statRoot
+--   where
+--     useless (S.Edge{..}) = case fst nodeLabel of
+--       Left S.NonTerm{..} -> cat `elem` ["fw", "fl", "ff"]
+--       _ -> False
+--     isTrunkNT (S.Edge{..}) = case fst nodeLabel of
+--       Left _nonTerm -> if edgeLabel == S.HeadYes
+--         then trace (show _nonTerm) True else False
+--       Right _ -> False
+
 prepTree
   = check
   . S.purge (useless . fst)
