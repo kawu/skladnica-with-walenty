@@ -1,9 +1,11 @@
 {-# LANGUAGE RecordWildCards #-}
 
 
+import           Control.Monad                 (void)
+
 -- import           Data.Monoid (mempty)
+import qualified Data.Char                     as C
 import           Options.Applicative
-import qualified Data.Char as C
 -- import qualified Data.Text as T
 
 
@@ -17,8 +19,8 @@ import qualified Data.Char as C
 -- import qualified NLP.Partage4Xmg.Select as S
 
 
-import qualified NLP.Skladnica.Map as Mapping
-import qualified NLP.Skladnica.Extract as Extract
+import qualified NLP.Skladnica.Extract         as Extract
+import qualified NLP.Skladnica.Map             as Mapping
 import qualified NLP.Skladnica.Walenty.MweTree as MweTree
 
 
@@ -34,10 +36,8 @@ data Command
       -- ^ Only parse and show the input XML file
     | Emboss FilePath
       -- ^ Mark MWEs as heads
-    | ExtractMWEs FilePath
-      -- ^ Extract ETs from the input XML files and show MWE trees
-    | TestParser FilePath String
-      -- ^ Extract local grammars and parse given the start symbol
+    | Extract FilePath String
+      -- ^ Extract grammar from the input XML files
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -112,12 +112,8 @@ embossOptions :: Parser Command
 embossOptions = Emboss <$> treebankParser
 
 
-extractMWEsOptions :: Parser Command
-extractMWEsOptions = ExtractMWEs <$> treebankParser
-
-
-testParserOptions :: Parser Command
-testParserOptions = TestParser
+extractOptions :: Parser Command
+extractOptions = Extract
   <$> treebankParser
   <*> strOption
         ( long "start"
@@ -125,11 +121,20 @@ testParserOptions = TestParser
           <> help "Start symbol of the grammar" )
 
 
+-- testParserOptions :: Parser Command
+-- testParserOptions = TestParser
+--   <$> treebankParser
+--   <*> strOption
+--         ( long "start"
+--           <> short 's'
+--           <> help "Start symbol of the grammar" )
+
+
 -- --------------------------------------------------
 -- -- Generation options
 -- --------------------------------------------------
--- 
--- 
+--
+--
 -- genOptions :: Parser Command
 -- genOptions = Gen
 --     <$> buildDataParser
@@ -139,13 +144,13 @@ testParserOptions = TestParser
 --            <> value 5
 --            <> long "max-size"
 --            <> short 'm' )
--- 
--- 
+--
+--
 -- --------------------------------------------------
 -- -- Generation/parsing options
 -- --------------------------------------------------
--- 
--- 
+--
+--
 -- genRandOptions :: Parser Command
 -- genRandOptions = GenRand
 --     <$> buildDataParser
@@ -168,13 +173,13 @@ testParserOptions = TestParser
 --                <> value 10
 --                <> long "tree-num"
 --                <> short 'n' ))
--- 
--- 
+--
+--
 -- --------------------------------------------------
 -- -- Stats options
 -- --------------------------------------------------
--- 
--- 
+--
+--
 -- statsOptions :: Parser Command
 -- statsOptions = Stats
 --     <$> buildDataParser
@@ -199,13 +204,13 @@ testParserOptions = TestParser
 -- --          <*> switch
 -- --                ( long "print-parsed-trees"
 -- --               <> short 'p' ) )
--- 
--- 
+--
+--
 -- --------------------------------------------------
 -- -- Selection options
 -- --------------------------------------------------
--- 
--- 
+--
+--
 -- selectOptions :: Parser Command
 -- selectOptions = fmap Select $ S.SelectCfg
 --     <$> option
@@ -226,13 +231,13 @@ testParserOptions = TestParser
 --            <> value 1
 --            <> long "merge-num"
 --            <> short 'k' )
--- 
--- 
+--
+--
 -- --------------------------------------------------
 -- -- AStar options
 -- --------------------------------------------------
--- 
--- 
+--
+--
 -- astarOptions :: Parser Command
 -- astarOptions = AStar
 --     <$> buildDataParser
@@ -265,14 +270,14 @@ opts = subparser
             (info (helper <*> embossOptions)
                 (progDesc "Parse the input treebank XML file")
                 )
-        <> command "extract-mwes"
-            (info (helper <*> extractMWEsOptions)
-                (progDesc "Extract ETs from the input XML files and show MWE trees")
+        <> command "extract"
+            (info (helper <*> extractOptions)
+                (progDesc "Extract the grammar from the input XML file")
                 )
-        <> command "test-parser"
-            (info (helper <*> testParserOptions)
-                (progDesc "Test parser (provisional)")
-                )
+--         <> command "test-parser"
+--             (info (helper <*> testParserOptions)
+--                 (progDesc "Test parser (provisional)")
+--                 )
 --         <> command "trees"
 --             (info (helper <*> (Trees <$> buildDataParser))
 --                 (progDesc "Show elementary trees, no FSs")
@@ -323,8 +328,8 @@ run cmd =
     Map cfg -> Mapping.mapMWEs cfg
     Parse path -> MweTree.parseAndPrint id path
     Emboss path -> MweTree.parseAndPrint MweTree.emboss path
-    ExtractMWEs path -> Extract.extractGrammar path
-    TestParser path begSym -> Extract.testParser path begSym
+    Extract path begSym -> void $ Extract.extractGrammar path begSym
+    -- TestParser path begSym -> Extract.testParser path begSym
 
 --          Trees buildData ->
 --             B.printTrees buildData
