@@ -141,37 +141,54 @@ extractGrammar skladnicaXML begSym0 = do
           input = AStar.fromList sent
           putRose = putStrLn . R.drawTree . fmap show
       liftIO $ do
+        putStrLn $ "===========================================\n"
         T.putStrLn $ "# PARSING: " `T.append` T.unwords (orthForms sklTree)
         putStrLn $ "# SKLADNICA DEPENDENCY TREE:\n"
+
       -- reference dependency tree
-      let depTree0 = canonize . asDepTree . tokenize $ sklTree
+      let depTree0 = canonize . asDepTree . tokenize $ mweTree -- sklTree
       liftIO $ mapM_ (putRose . Dep.toRose) (S.toList depTree0)
+
       -- computing the set of derivations
       hype <- liftIO $ AStar.earleyAuto auto input
-      let derivList = Deriv.derivTrees hype begSym sentLen
+      let maxLength = 1000000 -- TODO: make it a parameter
+          derivList = take maxLength $ Deriv.derivTrees hype begSym sentLen
+          derivNum = length derivList
       liftIO $ do
-        putStrLn $ "# NO. OF DERIVATIONS: " ++ show (length derivList)
+        putStrLn $ "# NO. OF DERIVATIONS: " ++
+          show derivNum ++ if derivNum == maxLength then "+" else ""
 
---       forM_ derivList $ \derivTree -> do
---         let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derivTree
---         liftIO $ do
---           putRose . Deriv.deriv4show $ derivTree
---           putRose . Dep.toRose $ depTree
---           mapM_
---             (putRose . Dep.toRose)
---             (S.toList . canonize . Dep.mapDep (const ()) $ depTree)
-
+      -- computing the minimal derivation consistent with the Składnica
+      -- mwe-marked tree
       let derivSize = Gorn.size . Gorn.fromDeriv
-          derivTree
-            = minimumBy (comparing derivSize)
+          minimumBy' cmp xs = case xs of
+            [] -> Nothing
+            _  -> Just $ minimumBy cmp xs
+          derivTreeMay
+            = minimumBy' (comparing derivSize)
             . filter ( (==depTree0) . canonize . Dep.mapDep (const ())
                        . Dep.fromDeriv . Gorn.fromDeriv )
             $ derivList
-          depTree = Dep.fromDeriv . Gorn.fromDeriv $ derivTree
-      liftIO $ do
-        putRose . Deriv.deriv4show $ derivTree
-        putRose . Dep.toRose $ depTree
-        -- putRose . Dep.toRose . canonize . Dep.mapDep (const ()) $ depTree
+
+      case derivTreeMay of
+        Nothing -> liftIO $ do
+          putStrLn "# THE CORRESPONDING DERIVATION NOT FOUND"
+          putStrLn "# BELOW, SOME OF THE POSSIBLE DERIVATIONS:\n"
+          forM_ (take 10 derivList) $ \derivTree -> do
+            let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derivTree
+            liftIO $ do
+              putRose . Deriv.deriv4show $ derivTree
+              putRose . Dep.toRose $ depTree
+              mapM_
+                (putRose . Dep.toRose)
+                (S.toList . canonize . Dep.mapDep (const ()) $ depTree)
+        Just derivTree -> do
+          let depTree = Dep.fromDeriv . Gorn.fromDeriv$  derivTree
+          liftIO $ do
+            putStrLn "# THE CORRESPONDING DERIVATION:\n"
+            putRose . Deriv.deriv4show $ derivTree
+            putRose . Dep.toRose $ depTree
+            -- putRose . Dep.toRose . canonize . Dep.mapDep (const ()) $ depTree
 
 
 ------------------------------------------------------------------------------
@@ -246,8 +263,13 @@ asDepTree R.Node{..} =
         -- WARNING: below, note that we parse over base forms
         , AStar.terminal = Skl.base term }
 
-    isHead t = headYes t || fweTerm t
+    -- When a node should be considered as a head?
+    -- Note that a terminal should be always considered as a head, while it
+    -- is not always marked as such in Składnica.
+    isHead t = headYes t || fweTerm t || isTerm t
+    -- Is it explicitely marked as a head node?
     headYes t = Skl.edgeLabel (R.rootLabel t) == Skl.HeadYes
+    -- Or maybe it is an "fw" node with a terminal child?
     fweTerm fw = isJust $ do
       fwCat <- nonTermCat fw
       guard $ fwCat == "fw"

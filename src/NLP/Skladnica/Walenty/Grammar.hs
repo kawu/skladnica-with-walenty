@@ -88,6 +88,7 @@ status xs = case xs of
     -- of the commas is marked as a trunk) as auxiliaries.
     -- UPDATE 11/07/2016: Trunk -> Arg, otherwise the resulting derivation is not
     -- consistent with the Składnica depdency tree.
+    -- -- | curLab `is` "spójnik" -> Trunk
     | curLab `is` "spójnik" -> Arg
     | otherwise          -> Modif
   (curLab, curHead) : []
