@@ -63,6 +63,13 @@ globalCfgOptions = New.GlobalCfg
           <> short 's'
           <> help "Start symbol of the grammar" ))
   <*> option auto
+        ( long "max-derivs"
+          <> short 'm'
+          <> value 1000000
+          <> help (concat
+                    [ "Maximum number of derivations generated in order to find"
+                    , " the derivations corresponding to Składnica trees" ] ) )
+  <*> option auto
         ( long "term-type"
           <> short 'e'
           <> help "Type of terminals" )

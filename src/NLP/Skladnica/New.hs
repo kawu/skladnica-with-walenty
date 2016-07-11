@@ -40,9 +40,9 @@ data GlobalCfg = GlobalCfg
     -- ^ Use frequencies to customize heuristic?
   , begSym          :: Text
     -- ^ Start symbol
---   , maxDerivNum     :: Int
---     -- ^ Maximum number of derivation to generate to find the
---     -- derivation corresponding to the given Składnica tree
+  , maxDerivNum     :: Int
+    -- ^ Maximum number of derivation to generate to find the
+    -- derivation corresponding to the given Składnica tree
   , termTyp         :: Ext.TermType
     -- ^ What type of terminals use in the experiments
   }
@@ -69,7 +69,7 @@ runExperiment GlobalCfg{..} = do
   forM_ (S.toList $ Ext.gramSet extract) $
     putStrLn . R.drawTree . fmap show
 
-  -- how to build a grammar?
+  -- grammar-building function
   let buildGram = if useFreqs
                   then Ext.buildFreqGram (Ext.freqMap extract)
                   else Ext.buildGram
@@ -80,73 +80,73 @@ runExperiment GlobalCfg{..} = do
   putStrLn "\n===== PARSING TESTS =====\n"
   skladnica <- MWE.readTop skladnicaXML
 
-  putStr "length,"
+  putStr "sent-length,reg-deriv-size,mwe-deriv-size,"
   putStr "chart-nodes-1,chart-arcs-1,agenda-nodes-1,agenda-arcs-1,"
   putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2"
   putStrLn ""
 
   -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
-  forM_ skladnica $ \sklTree0 -> do
+  forM_ skladnica $ \sklTree0 -> runMaybeT $ do
 
     -- First we construct two versions of the syntactic tree: one compositional,
     -- one which assumes MWE interpretations.
     let sklTree = fmap MWE.sklNode sklTree0
         mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
+
     -- Stop if the two versions are identical.
-    -- guard $ mweTree /= sklTree
-    if mweTree == sklTree
-      then return ()
-      else do
+    guard $ mweTree /= sklTree
 
-        -- Some utility "variables"
-        let sent = Ext.wordForms termTyp sklTree
-            sentLen = length sent
-            final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
-                   && AStar._dagID p == Left begSym
-            getWeight e = AStar.priWeight e + AStar.estWeight e
+    -- Some utility "variables"
+    let sent = Ext.wordForms termTyp sklTree
+        sentLen = length sent
+        final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
+               && AStar._dagID p == Left begSym
+        getWeight e = AStar.priWeight e + AStar.estWeight e
 
-        -- Column 1: sentence length
-        putStr (show sentLen)
+    -- Column: sentence length
+    liftIO $ putStr (show sentLen)
 
-        -- Build the local grammar (simple form of super-tagging)
-        let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
-            localGram = if restrictGrammar then buildGram localETs else globGram
+    -- Find the reference derivation trees corresponding to the syntactic trees
+    refSklDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
+    refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
 
-        -- Used to control the state of the parsing process
-        contRef <- liftIO $ newIORef None
+    -- Columns: reg-deriv-size and mwe-deriv-size
+    liftIO $ putStr "," >> putStr (show $ Ext.derivSize refSklDeriv)
+    liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
 
-        -- let pipe = Morph.hoist E.lift Ext.parsePipe
-        let pipe = Ext.parsePipe sent begSym localGram
-        hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
-          let item = AStar.modifItem hypeModif
-              itemWeight = AStar.modifTrav hypeModif
-              hype = AStar.modifHype hypeModif
-          void . runMaybeT $ do
-            cont <- liftIO (readIORef contRef)
-            case cont of
-              None -> do
-                AStar.ItemP p <- return item
-                E.guard (final p)
-                liftIO . writeIORef contRef . Some $ getWeight itemWeight
-              Some optimal -> do
-                guard $ getWeight itemWeight > optimal
-                -- the first time that the optimal weight is surpassed
-                liftIO $ do
-                  writeIORef contRef Done
-                  -- Columns 2,3,4,5: hype stats at checkpoint 1
-                  printHypeStats hype
-              Done -> return ()
-        -- Columns 6,7,8,9: hype stats at the end
-        printHypeStats hypeFini
-        putStrLn ""
+    -- Build the local grammar (simple form of super-tagging)
+    let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
+        localGram = if restrictGrammar then buildGram localETs else globGram
 
---     derivRegMay <- Ext.findDeriv maxDerivNum begSym mweTree
---     derivMweMay <- Ext.findDeriv maxDerivNum begSym mweTree
---     case derivMay of
---       Nothing -> return ()
---       Just _deriv -> do
---         -- now we have the corresponding reference derivation
+    -- Used to control the state of the parsing process
+    contRef <- liftIO $ newIORef None
 
+    -- We have to hoist the parsing pipe to `MaybeT`
+    let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
+    hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
+      let item = AStar.modifItem hypeModif
+          itemWeight = AStar.modifTrav hypeModif
+          hype = AStar.modifHype hypeModif
+      void . runMaybeT $ do
+        cont <- liftIO (readIORef contRef)
+        case cont of
+          None -> do
+            AStar.ItemP p <- return item
+            E.guard (final p)
+            liftIO . writeIORef contRef . Some $ getWeight itemWeight
+          Some optimal -> do
+            guard $ getWeight itemWeight > optimal
+            -- the first time that the optimal weight is surpassed
+            liftIO $ do
+              writeIORef contRef Done
+              -- Columns 2,3,4,5: hype stats at checkpoint 1
+              printHypeStats hype
+          Done -> return ()
+
+    -- Columns 6,7,8,9: hype stats at the end
+    liftIO $ do
+      printHypeStats hypeFini
+      putStrLn ""
 
 
 ------------------------------------------------------------------------------

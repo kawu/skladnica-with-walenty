@@ -11,7 +11,16 @@
 
 
 module NLP.Skladnica.Extract
-( Extract (..)
+(
+-- * Types
+  SklTree
+, DerTree
+, DepTree
+, Tok
+, derivSize
+
+-- * Extraction
+, Extract (..)
 , extractGrammar
 , fromFile
 , parse
@@ -82,6 +91,11 @@ type DerTree = Deriv.Deriv T.Text Tok
 
 -- | Dependency tree (for Składica trees)
 type DepTree = Dep.Tree (S.Set Tok) ()
+
+
+-- | Return the size (i.e., the number of ndoes)of the derivation tree.
+derivSize :: DerTree -> Int
+derivSize = Gorn.size . Gorn.fromDeriv
 
 
 -- | Extracted grammar.
@@ -180,23 +194,35 @@ miniDerivOf derivList sklTree =
 --   in  sklETs `S.union` mweETs
 
 
--- | Find a derivation tree corresponding to the given MWE-marked tree. We
--- assume that the optimal derivation contains the highest number of MWEs.
+-- -- | Find a derivation tree corresponding to the given MWE-marked tree. We
+-- -- assume that the optimal derivation contains the highest number of MWEs.
+-- findDeriv
+--   :: Int          -- ^ Upper limit on the number of generated derivations
+--   -> T.Text       -- ^ Grammar start symbol (TODO: could be deduced?)
+--   -> TermType
+--   -> MWE.MweTree  -- ^ MWE-marked Składnica tree
+--   -> IO (Maybe DerTree)
+-- findDeriv maxNum begSym termTyp sklTree0 = do
+--   let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
+--       sklTree = fmap MWE.sklNode sklTree0
+--       sklETs = G.extractGrammar sklTree
+--       mweETs = G.extractGrammar mweTree
+--       est = sklETs `S.union` mweETs
+--   derivList <- take maxNum <$> parse (wordForms termTyp sklTree) begSym est
+--   return $ miniDerivOf derivList mweTree
+
+
+-- | Find a derivation tree corresponding to the given Składnica tree
 findDeriv
   :: Int          -- ^ Upper limit on the number of generated derivations
   -> T.Text       -- ^ Grammar start symbol (TODO: could be deduced?)
-  -> TermType
-  -> MWE.MweTree  -- ^ MWE-marked Składnica tree
+  -> TermType     -- ^ Type of terminals involved
+  -> SklTree      -- ^ Składnica tree
   -> IO (Maybe DerTree)
-findDeriv maxNum begSym termTyp sklTree0 = do
-  let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
-      sklTree = fmap MWE.sklNode sklTree0
-      sklETs = G.extractGrammar sklTree
-      mweETs = G.extractGrammar mweTree
-      est = sklETs `S.union` mweETs
-  derivList <- take maxNum <$> parse (wordForms termTyp sklTree) begSym est
-  return $ miniDerivOf derivList mweTree
-
+findDeriv maxNum begSym termTyp sklTree = do
+  let ets = G.extractGrammar sklTree
+  derivList <- take maxNum <$> parse (wordForms termTyp sklTree) begSym ets
+  return $ miniDerivOf derivList sklTree
 
 -- | Extract local grammars from the individual sentences in the input forest,
 -- parse with the local grammars and show the corresponding derivation and
