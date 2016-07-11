@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TupleSections     #-}
 
 
 -- | Representing, parsing, and rendering Skladnica syntactic trees
@@ -11,10 +12,13 @@ module NLP.Skladnica.Walenty.MweTree
 -- * Core
   MweTree
 , MweNode (..)
+, MweInfo (..)
+, Reading (..)
 , cleanUp
 , emboss
 
 -- * Conversion
+, InTree
 , OutTree
 , fromOut
 
@@ -35,25 +39,28 @@ module NLP.Skladnica.Walenty.MweTree
 ) where
 
 
-import           Control.Applicative ((<|>), optional)
-import qualified Control.Arrow       as Arr
-import           Control.Monad       (msum)
+import           Control.Applicative           (optional, (<|>))
+import qualified Control.Arrow                 as Arr
+import qualified Control.Monad                 as Monad
+import           Control.Monad                 (msum)
 
-import qualified Data.Foldable       as F
-import qualified Data.Map.Strict     as M
-import qualified Data.Set            as S
-import qualified Data.Text           as T
-import qualified Data.Text.IO        as T
-import qualified Data.Text.Lazy      as L
-import qualified Data.Text.Lazy.IO   as L
-import qualified Data.Tree           as R
+import           Data.Maybe                    (catMaybes)
+import qualified Data.Foldable                 as F
+import qualified Data.Map.Strict               as M
+import qualified Data.Set                      as S
+import qualified Data.Text                     as T
+import qualified Data.Text.IO                  as T
+import qualified Data.Text.Lazy                as L
+import qualified Data.Text.Lazy.IO             as L
+import qualified Data.Tree                     as R
 
-import qualified Text.HTML.TagSoup   as Tag
-import           Text.XML.PolySoup   hiding (P, Q, XmlForest, XmlTree)
-import qualified Text.XML.PolySoup   as Poly
+import qualified Text.HTML.TagSoup             as Tag
+import           Text.XML.PolySoup             hiding (P, Q, XmlForest, XmlTree)
+import qualified Text.XML.PolySoup             as Poly
 
-import qualified NLP.Skladnica       as Skl
-import qualified NLP.Walenty.Types   as W
+import qualified NLP.Skladnica                 as Skl
+import qualified NLP.Skladnica.Walenty.Search2 as Q
+import qualified NLP.Walenty.Types             as W
 
 
 --------------------------------------------------------------------------------
@@ -69,10 +76,28 @@ type MweTree = R.Tree MweNode
 data MweNode = MweNode
   { sklNode :: Skl.Edge Skl.Node Skl.IsHead
     -- ^ The underlying node in Skladnica tree
-  , mweSet  :: S.Set Skl.NID
+  -- , mweSet  :: S.Set Skl.NID
+  , mweSet  :: Maybe (Q.Occur Skl.NID MweInfo)
     -- ^ Set of identifiers of terminal leaves making up the MWE
     -- rooted in the current node; no MWE if the set is empty
   } deriving (Show, Eq, Ord)
+
+
+-- | Information about the occurrence of a MWE.
+data MweInfo = MweInfo
+  { origin  :: Maybe T.Text
+    -- ^ Origin of the MWE
+  , mweTyp  :: Maybe T.Text
+    -- ^ Type of the MWE
+  , reading :: Maybe Reading
+    -- ^ Reading of the MWE
+  } deriving (Show, Eq, Ord)
+
+
+-- | Reading of a MWE.
+data Reading = Idiomatic | Compositional | Error
+  deriving (Show, Eq, Ord)
+
 
 
 -- | Retrieve ID of the root node.
@@ -101,7 +126,8 @@ cleanUp R.Node{..} = R.Node
     childrenMweSets = map (mweSet . R.rootLabel) subForest
     newRootLabel
       | mweSet rootLabel `elem` childrenMweSets =
-          rootLabel {mweSet = S.empty}
+          -- rootLabel {mweSet = S.empty}
+          rootLabel {mweSet = Nothing}
       | otherwise = rootLabel
 
 
@@ -112,9 +138,12 @@ emboss R.Node{..} = R.Node
   { R.rootLabel = rootLabel
   , R.subForest = mark (map emboss subForest) }
   where
-    mark
-      | S.null (mweSet rootLabel) = id
-      | otherwise = map $ fst . go (mweSet rootLabel)
+    mark = case mweSet rootLabel of
+      Nothing -> id
+      Just oc -> map $ fst . go (Q.markedSet oc)
+--     mark
+--       | S.null (mweSet rootLabel) = id
+--       | otherwise = map $ fst . go (mweSet rootLabel)
     go mweIDs t
       | or found || getRootID t `S.member` mweIDs =
           ( t { R.rootLabel = markAsHead (R.rootLabel t)
@@ -131,8 +160,19 @@ emboss R.Node{..} = R.Node
 --------------------------------------------------------------------------------
 
 
--- | What comes from the mapping.
-type OutTree = R.Tree (Skl.Edge Skl.Node Skl.IsHead, S.Set Skl.NID)
+-- | Skladnica input tree.
+type InTree = R.Tree (Skl.Edge Skl.Node Skl.IsHead)
+
+
+-- | Skladnica output (i.e., with MWEs) tree.
+type OutTree = R.Tree
+  ( Skl.Edge Skl.Node Skl.IsHead
+  , Maybe (Q.Occur Skl.NID MweInfo) )
+
+
+-- -- | What comes from the mapping.
+-- -- type OutTree = R.Tree (Skl.Edge Skl.Node Skl.IsHead, S.Set Skl.NID)
+-- type OutTree = Mapping.OutTree
 
 
 -- | Create `MweTree` from the tree resulting from MWEs->Skladnica mapping.
@@ -182,7 +222,10 @@ mweTreeXml root@R.Node{..} = R.Node
     nodeHead = case Skl.edgeLabel (sklNode rootLabel) of
       Skl.HeadYes -> "yes"
       Skl.HeadNo -> "no"
-    mweForest = mweSetXml root . mweSet $ rootLabel
+    -- mweForest = mweSetXml root . mweSet $ rootLabel
+    mweForest = case mweSet rootLabel of
+      Nothing -> []
+      Just oc -> mweSetXml root oc
     childrenTree = R.Node
       { R.rootLabel = Tag.TagOpen "children" []
       , R.subForest = map mweTreeXml subForest }
@@ -203,12 +246,27 @@ labelXml (Left Skl.NonTerm{..}) =
 
 
 -- | Convert a set of MWE identifiers to an XML forest.
-mweSetXml :: MweTree -> S.Set Skl.NID -> XmlForest
-mweSetXml tree s
-  | S.null s = []
+mweSetXml :: MweTree -> Q.Occur Skl.NID MweInfo -> XmlForest
+mweSetXml tree occur
+  | S.null (Q.markedSet occur) = []
   | otherwise = (:[]) $ R.Node
-    { R.rootLabel = Tag.TagOpen "mwe" []
-    , R.subForest = map (mweXml tree) (S.toList s) }
+    { R.rootLabel = Tag.TagOpen "mwe" atts
+    , R.subForest = map (mweXml tree) (S.toList $ Q.markedSet occur) }
+  where
+    atts = catMaybes
+      [ ("origin",) <$> origin (Q.exprInfo occur)
+      , ("type",) <$> mweTyp (Q.exprInfo occur)
+      , Just . ("reading",) . showReading $ reading (Q.exprInfo occur) ]
+    showReading (Just Idiomatic) = "idiomatic"
+    showReading (Just Compositional) = "compositional"
+    showReading (Just Error) = "error"
+    showReading Nothing = "unknown"
+-- mweSetXml :: MweTree -> S.Set Skl.NID -> XmlForest
+-- mweSetXml tree s
+--   | S.null s = []
+--   | otherwise = (:[]) $ R.Node
+--     { R.rootLabel = Tag.TagOpen "mwe" []
+--     , R.subForest = map (mweXml tree) (S.toList s) }
 
 
 -- | Convert a MWE to an XML tree.
@@ -304,7 +362,7 @@ nodeQ =
       cat <- first catQ
       morph <- first morphQ
       children <- first childrenQ
-      mwes <- optional $ first mwesQ
+      mwe <- optional $ first mweQ
       let edge = Skl.Edge
             { Skl.edgeLabel = edgeLabel
             , Skl.nodeLabel = nodeLabel }
@@ -320,18 +378,33 @@ nodeQ =
       return $ R.Node
         { R.rootLabel = MweNode
           { sklNode = edge
-          , mweSet = maybe S.empty id mwes }
+          , mweSet = mwe }
         , R.subForest = children }
 
 
 -- | MWE set parser.
-mwesQ :: Q (S.Set Skl.NID)
-mwesQ = S.fromList <$> named "mwe" `joinR` every' mweQ
+-- mweQ :: Q (S.Set Skl.NID)
+mweQ :: Q (Q.Occur Skl.NID MweInfo)
+-- mweQ = S.fromList <$> named "mwe" `joinR` every' lexQ
+mweQ = (named "mwe" *> mweInfoQ) `join` \mweInfo -> do
+  lexs <- every' lexQ
+  return $ Q.Occur
+    { Q.markedSet = S.fromList lexs
+    , Q.exprInfo = mweInfo }
+  where
+    mweInfoQ = MweInfo
+      <$> optional (L.toStrict <$> attr "origin")
+      <*> optional (L.toStrict <$> attr "type")
+      <*> (readReading <$> attr "reading")
+    readReading "idiomatic" = Just Idiomatic
+    readReading "compositional" = Just Compositional
+    readReading "error" = Just Error
+    readReading _ = Nothing
 
 
 -- | Single MWE parser.
-mweQ :: Q Skl.NID
-mweQ = node $ named "lex" *> (read . L.unpack <$> attr "nid")
+lexQ :: Q Skl.NID
+lexQ = node $ named "lex" *> (read . L.unpack <$> attr "nid")
 
 
 -- | Category parser
@@ -373,7 +446,7 @@ leafQ =
           , Skl.children = [] -- whatever...
           }
     return $ R.Node
-      { R.rootLabel = MweNode {sklNode = edge, mweSet = S.empty}
+      { R.rootLabel = MweNode {sklNode = edge, mweSet = Nothing}
       , R.subForest = [] }
 
 

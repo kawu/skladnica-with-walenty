@@ -16,6 +16,7 @@ module NLP.Skladnica.Walenty.Search2
 -- ** Primitives
   Expr (..)
 , Type (..)
+, Occur (..)
 , markOne
 , markAll
 -- ** Constructions
@@ -32,7 +33,8 @@ module NLP.Skladnica.Walenty.Search2
 import           Control.Applicative        (empty, (<|>))
 import qualified Control.Monad.State.Strict as E
 
-import           Data.List                  (foldl')
+import           Data.Foldable              as F
+-- import           Data.List                  (foldl')
 import qualified Data.Set                   as S
 import qualified Data.Tree                  as R
 
@@ -161,6 +163,26 @@ type Mark i = E.State (S.Set i)
 -- type Mark i n = E.RWS (MarkState n) () (S.Set i)
 
 
+-- | A data type for representing the identified occurrences.
+data Occur i o = Occur
+  { markedSet :: S.Set i
+    -- ^ The set of selected nodes
+  , exprInfo :: o
+    -- ^ Meta-information about the expression of which the occurrence has been
+    -- found; can be useful because otherwise we don't know which expression was
+    -- used to find the `markedSet`.
+  } deriving (Show, Eq, Ord)
+
+
+-- | Join two occurences into one.  WARNING: this is a lossy operation
+-- in the sense that, if occurrences of two expressions are identified
+-- over a given node, only the bigger of the two will be preserved.
+joinOccur :: Occur i o -> Occur i o -> Occur i o
+joinOccur o1 o2
+  | S.size (markedSet o1) < S.size (markedSet o2) = o2
+  | otherwise = o1
+
+
 -- | Run the `Mark` monad, i.e. match the given expression
 -- against the given (child) tree and, if the match is found,
 -- returned the tree with the expression matched.
@@ -249,12 +271,15 @@ markOr mark x y t = do
 markAll
   :: Ord i
   => (n -> i)
-  -> [Expr n 'Tree]
+  -> [(Expr n 'Tree, o)]
+  -- ^ The individual expressions together with the corresponding
+  -- meta-level information about the expression
   -> R.Tree n
-  -> R.Tree (n, S.Set i)
+  -- -> R.Tree (n, S.Set i)
+  -> R.Tree (n, Maybe (Occur i o))
 markAll getID es t =
   let update tree expr = markOne getID expr tree
-  in  foldl' update (fmap (, S.empty) t) es
+  in  foldl' update (fmap (, Nothing) t) es
 
 
 -- | Mark the tree with an occurence of the given expression.
@@ -264,14 +289,15 @@ markOne
   :: (Ord i)
   => (n -> i)
      -- ^ Get ID of a node
-  -> Expr n 'Tree
-     -- ^ The expression to evaluate over a given tree
-  -> R.Tree (n, S.Set i)
+  -> (Expr n 'Tree, o)
+     -- ^ The expression to evaluate over a given tree and the corresponding
+     -- meta-level information
+  -> R.Tree (n, Maybe (Occur i o))
      -- ^ The tree to evaluate the expression on
-  -> R.Tree (n, S.Set i)
+  -> R.Tree (n, Maybe (Occur i o))
      -- ^ The resulting tree, where nodes are possibly annotated
      -- with the corresponding marked nodes
-markOne getID0 e0 t =
+markOne getID0 (e0, info) t =
   go t
   where
     e = transform fst e0
@@ -279,7 +305,9 @@ markOne getID0 e0 t =
     go tree = R.Node
       { R.rootLabel =
           let idSet = runMark getID e tree
-          in  onSnd (S.union idSet) (R.rootLabel tree)
+              occur = Occur idSet info
+              join = F.foldl' joinOccur occur -- F.foldl to make it work with Maybes
+          in onSnd (Just . join) (R.rootLabel tree)
       , R.subForest =
           [ go child
           | child <- R.subForest tree ] }

@@ -13,9 +13,7 @@
 module NLP.Skladnica.Walenty.Mapping
 (
 -- * Types and Funs
-  InTree
-, OutTree
-, Edge
+  Edge
 , terminals
 , querify
 , markSklTree
@@ -46,6 +44,7 @@ import qualified NLP.Skladnica                 as S
 import qualified NLP.Walenty.Types             as W
 
 import qualified NLP.Skladnica.Walenty.Search2 as Q
+import qualified NLP.Skladnica.Walenty.MweTree as MWE
 
 
 -- | `Edge` from Składnica (or rather, node with info about the ingoing edge).
@@ -57,18 +56,9 @@ type Attr = Text
 type AttrVal = Text
 
 
--- | Skladnica input tree.
-type InTree = R.Tree (S.Edge S.Node S.IsHead)
-
-
--- | Skladnica output (i.e., with MWEs) tree.
--- type OutTree = S.Tree (S.Node, Set.Set i) S.IsHead
-type OutTree = R.Tree (S.Edge S.Node S.IsHead, Set.Set S.NID)
-
-
 -- | Retrieve terminal leaves of the given tree.
 terminals
-  :: InTree
+  :: MWE.InTree
   -> [S.Term]
 terminals =
   let getTerm S.Node{..} = case label of
@@ -78,8 +68,18 @@ terminals =
 
 
 -- | Mark Składnica tree with MWEs.
-markSklTree :: [Q.Expr Edge 'Q.Tree] -> InTree -> OutTree
+-- markSklTree :: [Q.Expr Edge 'Q.Tree] -> MWE.InTree -> MWE.OutTree
+markSklTree
+  :: [(Q.Expr Edge 'Q.Tree, MWE.MweInfo)]
+  -> MWE.InTree
+  -> MWE.OutTree
 markSklTree = Q.markAll (S.nid . S.nodeLabel)
+-- markSklTree =
+--   let atts = MWE.MweInfo
+--         { MWE.origin = Just "walenty"
+--         , MWE.mweTyp = Nothing
+--         , MWE.reading = Nothing }
+--    in Q.markAll (S.nid . S.nodeLabel) . map (, atts)
 
 
 -- | Convert the given verbal entry from Walenty to a query.

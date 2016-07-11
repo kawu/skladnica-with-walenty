@@ -158,7 +158,7 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
   let sejf = sejfPartition Sejf.orth sejf0
   -- read NCP-NEs dictionary
   nes0 <- nubOrd <$> NE.nesInCorpus ncpPath
-  let nes = sejfPartition id nes0
+  let nes = sejfPartition NE.orth nes0
   putStrLn $ "===== NEs ===== "
   forM_ nes $ \ne -> print ne
   putStrLn $ "===== NEs END ===== "
@@ -186,7 +186,7 @@ extractGrammar skladnicaDir walentyPath expansionPath sejfPath ncpPath = do
             | (entry, wordSet) <- sejf0
             , wordSet `S.isSubsetOf` sentSet ]
           nes =
-            [ entry
+            [ NE.orth entry
             | (entry, wordSet) <- nes0
             , wordSet `S.isSubsetOf` sentSet ]
           exprs1 = map Q.querify walenty

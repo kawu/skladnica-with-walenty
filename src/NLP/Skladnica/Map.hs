@@ -5,8 +5,8 @@
 {-# LANGUAGE TupleSections     #-}
 
 
--- | A module responsible for identifying occurrences of the
--- Walenty valency dictionary entries in the Skladnica treebank.
+-- | A module responsible for identifying occurrences dictionary
+-- entries in the Skladnica treebank.
 
 
 module NLP.Skladnica.Map
@@ -91,7 +91,7 @@ mapMWEs MapCfg{..} = do
   nes0 <- nubOrd <$> case mayNcpPath of
     Just ncpPath -> NE.nesInCorpus ncpPath
     Nothing -> return []
-  let nes = sejfPartition id nes0
+  let nes = sejfPartition NE.orth nes0
   -- per each XML file...
   xmlFiles <- getXmlFiles skladnicaDir
   forM_ xmlFiles (procPath walenty sejf nes)
@@ -110,14 +110,30 @@ mapMWEs MapCfg{..} = do
             [ entry
             | (entry, wordSet) <- nes0
             , wordSet `S.isSubsetOf` sentSet ]
-      let exprs1 = map Mapping.querify walenty
-          exprs2 = map (Sejf.querify' Sejf.IgnoreCase) sejf
-          exprs3 = map (Sejf.querifyOrth' Sejf.CaseSensitive) nes
+      let exprs1 = map ((,walentyInfo) . Mapping.querify) walenty
+          exprs2 = map ((,sejfInfo) . Sejf.querify' Sejf.IgnoreCase) sejf
+          exprs3 = map
+            ( \ne ->
+                ( Sejf.querifyOrth' Sejf.CaseSensitive $ NE.orth ne
+                , nesInfo ne )
+            ) nes
       forM_ sklForest $ \sklTree -> do
         let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
         T.putStrLn . MWE.renderXml $
           let path = drop (length skladnicaDir) skladnicaXML
           in  MWE.outToXml [("file", T.pack path)] mweTree
+    walentyInfo = genericInfo "walenty"
+    sejfInfo = genericInfo "sejf"
+    genericInfo orig = MWE.MweInfo
+      { MWE.origin = Just orig
+      , MWE.mweTyp = Nothing
+      , MWE.reading = Nothing }
+    nesInfo NE.NE{..} = MWE.MweInfo
+      { MWE.origin = Just "nkjp"
+      , MWE.mweTyp = Just $ neType `T.append` case neSubType of
+          Nothing -> ""
+          Just subType -> "-" `T.append` subType
+      , MWE.reading = Nothing }
 
 
 ------------------------------------------------------------------------------
