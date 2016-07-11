@@ -22,6 +22,7 @@ import qualified Data.Tree                     as R
 import           Pipes
 
 import qualified NLP.Partage.AStar             as AStar
+import qualified NLP.Partage.AStar.Deriv       as Deriv
 
 import qualified NLP.Skladnica.Extract         as Ext
 import qualified NLP.Skladnica.Walenty.Grammar as G
@@ -82,7 +83,9 @@ runExperiment GlobalCfg{..} = do
 
   putStr "sent-length,reg-deriv-size,mwe-deriv-size,"
   putStr "chart-nodes-1,chart-arcs-1,agenda-nodes-1,agenda-arcs-1,"
-  putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2"
+  putStr "encodes-reg-1,encodes-mwe-1,"
+  putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2,"
+  putStr "encodes-reg-2,encodes-mwe-2"
   putStrLn ""
 
   -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
@@ -107,11 +110,11 @@ runExperiment GlobalCfg{..} = do
     liftIO $ putStr (show sentLen)
 
     -- Find the reference derivation trees corresponding to the syntactic trees
-    refSklDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
+    refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
     refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
 
     -- Columns: reg-deriv-size and mwe-deriv-size
-    liftIO $ putStr "," >> putStr (show $ Ext.derivSize refSklDeriv)
+    liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
     liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
 
     -- Build the local grammar (simple form of super-tagging)
@@ -139,13 +142,20 @@ runExperiment GlobalCfg{..} = do
             -- the first time that the optimal weight is surpassed
             liftIO $ do
               writeIORef contRef Done
-              -- Columns 2,3,4,5: hype stats at checkpoint 1
+              -- Columns: hype stats at checkpoint 1
               printHypeStats hype
+              -- Column: are ref. derivations encoded in the graph
+              let encodes = Deriv.encodes hype begSym sentLen
+              putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+              putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
           Done -> return ()
 
-    -- Columns 6,7,8,9: hype stats at the end
+    -- Columns: hype stats at the end, are ref. derivations encoded in the graph
     liftIO $ do
       printHypeStats hypeFini
+      let encodes = Deriv.encodes hypeFini begSym sentLen
+      putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+      putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
       putStrLn ""
 
 
