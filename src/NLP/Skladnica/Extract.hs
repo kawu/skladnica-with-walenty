@@ -11,7 +11,19 @@
 
 
 module NLP.Skladnica.Extract
-( extractGrammar
+( Extract (..)
+, extractGrammar
+, fromFile
+, parse
+, parsePipe
+, findDeriv
+
+, TermType (..)
+, wordForms
+
+-- * Utils
+, buildGram
+, buildFreqGram
 ) where
 
 
@@ -34,6 +46,8 @@ import qualified Data.Text.IO                  as T
 import           Data.Tree                     as R
 
 import qualified System.FilePath.Find          as F
+
+import           Pipes
 
 import qualified NLP.Partage.AStar             as AStar
 import qualified NLP.Partage.AStar.DepTree     as Dep
@@ -58,60 +72,130 @@ import qualified NLP.Skladnica.Walenty.Search  as Search
 type SklTree = Skl.Tree Skl.Node Skl.IsHead
 
 
+-- | Token of a derivation/dependency tree
+type Tok = AStar.Tok T.Text
+
+
 -- | Derivation tree.
-type DerTree = Deriv.Deriv T.Text T.Text
+type DerTree = Deriv.Deriv T.Text Tok
 
 
 -- | Dependency tree (for Składica trees)
-type DepTree = Dep.Tree (S.Set (AStar.Tok T.Text)) ()
+type DepTree = Dep.Tree (S.Set Tok) ()
 
 
--- | Extraction result.
+-- | Extracted grammar.
 data Extract = Extract
-  { gramSet :: S.Set G.ET
-    -- ^ The resulting grammar
-  , dataSet :: M.Map SklTree DerTree
-    -- ^ Derivation trees assigned to Składnica trees
+  { gramSet :: G.TAG
+  , freqMap :: M.Map T.Text Int
   } deriving (Show, Eq, Ord)
 
 
 emptyExtract :: Extract
-emptyExtract = Extract S.empty M.empty
+emptyExtract = Extract G.empty M.empty
 
 
--- showExtract :: Extract -> IO ()
--- showExtract Extract{..} = do
---   putStr "PARSED FILES: " >> print (S.size parsedFiles)
---   putStr "SEEN FILES: " >> print (S.size seenFiles)
---   putStr "MWE FILES: " >> print (S.size mweFiles)
---   putStr "GRAM TREES: " >> print (S.size gramSet)
---   putStr "FREQ MAP: " >> print (M.size freqMap)
+-- | Extract TAG grammar from the input XML treebank.
+fromFile
+  :: TermType
+  -> FilePath
+  -> IO Extract
+fromFile termTyp skladnicaXML = do
+  trees <- MWE.readTop skladnicaXML
+  flip E.execStateT emptyExtract $ do
+    forM_ trees $ \sklTree0 -> do
+      let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
+          sklTree = fmap MWE.sklNode sklTree0
+          sklETs = G.extractGrammar sklTree
+          mweETs = G.extractGrammar mweTree
+          est = sklETs `S.union` mweETs
+      when (S.null est) $ do
+        liftIO $ putStrLn "WARNING: something went wrong..."
+      E.modify' $ \st -> st
+        { gramSet = gramSet st `S.union` est
+        , freqMap = M.unionWith (+) (freqMap st) (freqMapFrom termTyp sklTree) }
 
 
--- -- | Read all verb entries from Walenty and search for them
--- -- in Składnica treebank.
--- -- Extract the grammar from the resulting syntactic trees
--- -- (both with and without MWEs).
--- extractGrammar'
---   :: FilePath -- ^ Składnica XML file
---   -> IO Extract
--- extractGrammar' skladnicaXML = do
---   trees <- MWE.readTop skladnicaXML
---   flip E.execStateT emptyExtract $ do
---     forM_ trees $ \sklTree0 -> do
---       let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
---           sklTree = fmap MWE.sklNode sklTree0
---           sklETs = G.extractGrammar sklTree
---           mweETs = G.extractGrammar mweTree
---           est = sklETs `S.union` mweETs
---           realMweETs = mweETs `S.difference` sklETs
---       when (S.null est) $ do
---         liftIO $ putStrLn "WARNING: something went wrong..."
---       when (not $ S.null realMweETs) $ do
---         -- putStrLn "MWE elementary trees found:\n"
---         liftIO $ putStrLn
---           . R.drawForest . map (fmap show)
---           . S.toList $ realMweETs
+-- | Parse the given sentence with the given grammar.
+parse
+  :: [T.Text] -- ^ Input sentence
+  -> T.Text   -- ^ Start symbol
+  -> G.TAG    -- ^ Grammar
+  -> IO [DerTree]
+parse sent begSym tag = do
+  let gram = buildGram tag
+      termMemo = Memo.wrap read show $ Memo.list Memo.char
+      auto = AStar.mkAuto termMemo gram
+      sentLen = length sent
+      input = AStar.fromList sent
+  hype <- AStar.earleyAuto auto input
+  return $ Deriv.derivTrees hype begSym sentLen
+
+
+-- | Parse the given sentence with the given compressed grammar.
+parsePipe
+  :: [T.Text] -- ^ Input sentence
+  -> T.Text   -- ^ Start symbol
+  -> DAG.Gram T.Text T.Text -- ^ Compressed TAG grammar
+  -> Producer (Deriv.ModifDerivs T.Text T.Text) IO (AStar.Hype T.Text T.Text)
+parsePipe sent begSym gram =
+  let termMemo = Memo.wrap read show $ Memo.list Memo.char
+      auto = AStar.mkAuto termMemo gram
+      sentLen = length sent
+      input = AStar.fromList sent
+      derivConf = Deriv.DerivR
+        { Deriv.startSym = begSym
+        , Deriv.sentLen = sentLen }
+  in  AStar.earleyAutoP auto input
+      >-> Deriv.derivsPipe derivConf
+--       -- below we make the AStar pipe work in the State monad
+--       -- transformer over IO (normally it works just over IO)
+--       pipe = Morph.hoist E.lift
+--         ( AStar.earleyAutoP auto input
+--           >-> Deriv.derivsPipe derivConf )
+
+
+-- | Find the minimal derivation consistent with the given Składnica
+-- syntactic tree.
+miniDerivOf :: [DerTree] -> SklTree -> Maybe DerTree
+miniDerivOf derivList sklTree =
+  let depTree = canonize . asDepTree . tokenize $ sklTree
+      derivSize = Gorn.size . Gorn.fromDeriv
+      minimumBy' cmp xs = case xs of
+        [] -> Nothing
+        _  -> Just $ minimumBy cmp xs
+  in  minimumBy' (comparing derivSize)
+        . filter ( (==depTree) . canonize . Dep.mapDep (const ())
+               . Dep.fromDeriv . Gorn.fromDeriv )
+        $ derivList
+
+
+-- -- | Extract TAG corresponding to the given Składnica tree.
+-- localTAG :: MWE.MweTree -> G.TAG
+-- localTAG sklTree0 =
+--   let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
+--       sklTree = fmap MWE.sklNode sklTree0
+--       sklETs = G.extractGrammar sklTree
+--       mweETs = G.extractGrammar mweTree
+--   in  sklETs `S.union` mweETs
+
+
+-- | Find a derivation tree corresponding to the given MWE-marked tree. We
+-- assume that the optimal derivation contains the highest number of MWEs.
+findDeriv
+  :: Int          -- ^ Upper limit on the number of generated derivations
+  -> T.Text       -- ^ Grammar start symbol (TODO: could be deduced?)
+  -> TermType
+  -> MWE.MweTree  -- ^ MWE-marked Składnica tree
+  -> IO (Maybe DerTree)
+findDeriv maxNum begSym termTyp sklTree0 = do
+  let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
+      sklTree = fmap MWE.sklNode sklTree0
+      sklETs = G.extractGrammar sklTree
+      mweETs = G.extractGrammar mweTree
+      est = sklETs `S.union` mweETs
+  derivList <- take maxNum <$> parse (wordForms termTyp sklTree) begSym est
+  return $ miniDerivOf derivList mweTree
 
 
 -- | Extract local grammars from the individual sentences in the input forest,
@@ -130,46 +214,27 @@ extractGrammar skladnicaXML begSym0 = do
           sklETs = G.extractGrammar sklTree
           mweETs = G.extractGrammar mweTree
           est = sklETs `S.union` mweETs
-      when (S.null est) $ do
-        liftIO $ putStrLn "WARNING: something went wrong..."
-      let begSym = T.pack begSym0
-          gram = buildGram est
-          termMemo = Memo.wrap read show $ Memo.list Memo.char
-          auto = AStar.mkAuto termMemo gram
-          sent = baseForms sklTree
-          sentLen = length sent
-          input = AStar.fromList sent
-          putRose = putStrLn . R.drawTree . fmap show
       liftIO $ do
+        when (S.null est) $ putStrLn "ERROR: something went wrong..."
         putStrLn $ "===========================================\n"
-        T.putStrLn $ "# PARSING: " `T.append` T.unwords (orthForms sklTree)
+        T.putStrLn $ "# PARSING: " `T.append` T.unwords (_orthForms sklTree)
         putStrLn $ "# SKLADNICA DEPENDENCY TREE:\n"
 
       -- reference dependency tree
-      let depTree0 = canonize . asDepTree . tokenize $ mweTree -- sklTree
-      liftIO $ mapM_ (putRose . Dep.toRose) (S.toList depTree0)
+      let putRose = putStrLn . R.drawTree . fmap show
+          refTree = canonize . asDepTree . tokenize $ mweTree -- sklTree
+      liftIO $ mapM_ (putRose . Dep.toRose) (S.toList refTree)
 
       -- computing the set of derivations
-      hype <- liftIO $ AStar.earleyAuto auto input
       let maxLength = 1000000 -- TODO: make it a parameter
-          derivList = take maxLength $ Deriv.derivTrees hype begSym sentLen
-          derivNum = length derivList
-      liftIO $ do
-        putStrLn $ "# NO. OF DERIVATIONS: " ++
-          show derivNum ++ if derivNum == maxLength then "+" else ""
+      derivList <- liftIO $ take maxLength
+        <$> parse (_baseForms sklTree) (T.pack begSym0) est
+      let derivNum = length derivList
+      liftIO . putStrLn $
+        "# NO. OF DERIVATIONS: " ++ show derivNum ++
+        if derivNum == maxLength then "+" else ""
 
-      -- computing the minimal derivation consistent with the Składnica
-      -- mwe-marked tree
-      let derivSize = Gorn.size . Gorn.fromDeriv
-          minimumBy' cmp xs = case xs of
-            [] -> Nothing
-            _  -> Just $ minimumBy cmp xs
-          derivTreeMay
-            = minimumBy' (comparing derivSize)
-            . filter ( (==depTree0) . canonize . Dep.mapDep (const ())
-                       . Dep.fromDeriv . Gorn.fromDeriv )
-            $ derivList
-
+      let derivTreeMay = miniDerivOf derivList mweTree
       case derivTreeMay of
         Nothing -> liftIO $ do
           putStrLn "# THE CORRESPONDING DERIVATION NOT FOUND"
@@ -336,6 +401,33 @@ canonize =
 
 
 ------------------------------------------------------------------------------
+-- Extracting Word Forms
+--------------------------------------------------------------------------------
+
+
+-- | Type of terminals to use for the experiments.
+data TermType = Orth | Base
+  deriving (Show, Read, Eq, Ord)
+
+
+-- | Retrieve terminal orth forms from the given syntactic tree.
+wordForms :: TermType -> SklTree -> [T.Text]
+wordForms tt = case tt of
+  Orth -> _orthForms
+  Base -> _baseForms
+
+
+-- | Retrieve terminal base forms from the given syntactic tree.
+_baseForms :: SklTree -> [T.Text]
+_baseForms = map Skl.base . Search.terminals
+
+
+-- | Retrieve terminal orth forms from the given syntactic tree.
+_orthForms :: SklTree -> [T.Text]
+_orthForms = map Skl.orth . Search.terminals
+
+
+------------------------------------------------------------------------------
 -- Utils
 --------------------------------------------------------------------------------
 
@@ -345,11 +437,22 @@ buildGram :: S.Set G.ET -> DAG.Gram T.Text T.Text
 buildGram = DAG.mkGram . map (,1) . S.toList
 
 
--- | Retrieve terminal base forms from the given syntactic tree.
-baseForms :: SklTree -> [T.Text]
-baseForms = map Skl.base . Search.terminals
+-- | Build a grammar from the given set of ETs.
+buildFreqGram
+  :: M.Map T.Text Int     -- ^ Frequency map
+  -> S.Set G.ET
+  -> DAG.Gram T.Text T.Text
+buildFreqGram fm = DAG.mkFreqGram fm . map (,1) . S.toList
 
 
--- | Retrieve terminal orth forms from the given syntactic tree.
-orthForms :: SklTree -> [T.Text]
-orthForms = map Skl.orth . Search.terminals
+-- | Extract frequency map from a tree.
+freqMapFrom
+  :: TermType
+  -> SklTree
+  -> M.Map T.Text Int
+freqMapFrom tt = count . wordForms tt
+
+
+-- | Count elements in the input list.
+count :: Ord a => [a] -> M.Map a Int
+count = M.fromListWith (+) . map (,1)

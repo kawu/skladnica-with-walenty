@@ -6,7 +6,7 @@ import           Control.Monad                 (void)
 -- import           Data.Monoid (mempty)
 import qualified Data.Char                     as C
 import           Options.Applicative
--- import qualified Data.Text as T
+import qualified Data.Text as T
 
 
 -- -- import qualified NLP.Partage4Xmg.Automat as A
@@ -19,6 +19,7 @@ import           Options.Applicative
 -- import qualified NLP.Partage4Xmg.Select as S
 
 
+import qualified NLP.Skladnica.New             as New
 import qualified NLP.Skladnica.Extract         as Extract
 import qualified NLP.Skladnica.Map             as Mapping
 import qualified NLP.Skladnica.Walenty.MweTree as MweTree
@@ -38,6 +39,8 @@ data Command
       -- ^ Mark MWEs as heads
     | Extract FilePath String
       -- ^ Extract grammar from the input XML files
+    | Full New.GlobalCfg
+      -- ^ Perform the full experiment
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -48,6 +51,21 @@ data Command
 --     's':_       -> B.SetAuto -- Set of automata
 --     'x':_       -> B.SetTrie -- Set of tries
 --     _           -> B.Auto
+
+
+globalCfgOptions :: Parser New.GlobalCfg
+globalCfgOptions = New.GlobalCfg
+  <$> treebankParser
+  <*> switch (long "restrict-grammar" <> short 'r')
+  <*> switch (long "use-freqs" <> short 'f')
+  <*> fmap T.pack (strOption
+        ( long "start"
+          <> short 's'
+          <> help "Start symbol of the grammar" ))
+  <*> option auto
+        ( long "term-type"
+          <> short 'e'
+          <> help "Type of terminals" )
 
 
 mapCfgOptions :: Parser Mapping.MapCfg
@@ -274,6 +292,10 @@ opts = subparser
             (info (helper <*> extractOptions)
                 (progDesc "Extract the grammar from the input XML file")
                 )
+        <> command "full"
+            (info (helper <*> (Full <$> globalCfgOptions))
+                (progDesc "Perform the full experiment")
+                )
 --         <> command "test-parser"
 --             (info (helper <*> testParserOptions)
 --                 (progDesc "Test parser (provisional)")
@@ -329,6 +351,7 @@ run cmd =
     Parse path -> MweTree.parseAndPrint id path
     Emboss path -> MweTree.parseAndPrint MweTree.emboss path
     Extract path begSym -> void $ Extract.extractGrammar path begSym
+    Full cfg -> void $ New.runExperiment cfg
     -- TestParser path begSym -> Extract.testParser path begSym
 
 --          Trees buildData ->

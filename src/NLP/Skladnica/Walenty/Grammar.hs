@@ -8,7 +8,9 @@
 
 
 module NLP.Skladnica.Walenty.Grammar
-( ET
+( TAG
+, ET
+, empty
 , Status (..)
 , extractGrammar
 , topShatter
@@ -215,6 +217,15 @@ onLeft prev ((curr, stat) : rest) =
 
 -- -- | Again, a standalone Ord instance for rose trees...
 -- deriving instance Ord a => Ord (R.Tree a)
+
+
+-- | TAG grammar
+type TAG = S.Set ET
+
+
+-- | Empty TAG
+empty :: TAG
+empty = S.empty
 
 
 -- | A TAG elementary tree.
