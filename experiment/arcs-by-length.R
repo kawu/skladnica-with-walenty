@@ -36,8 +36,8 @@ lines(arcs2$length, arcs2$x, type="b", col='red', pch=1)
 
 # add the legend
 legend('bottom',
-       legend=c('Checkpoint', 'Final'),
-       col=c('green', 'red'),
+       legend=c('Final', 'Checkpoint'),
+       col=c('red', 'green'),
        pch=c(4, 1),
        cex=1.0, pt.cex = 1, bty='n', lty=1)
 

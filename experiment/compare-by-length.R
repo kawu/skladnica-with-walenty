@@ -11,11 +11,8 @@ data2 <- read.csv(file=dataPath2, sep=",")
 pdf(outPath)
 
 getArcs = function(data) {
-  xs0 <- data$mwe.deriv.size / data$reg.deriv.size
-  xs <- round(xs0,digits=2)
-  # xs <- xs0
+  xs <- data$sent.length
   ys <- (data$chart.arcs.1 + data$agenda.arcs.1) / data$chart.arcs.2
-  # print(ys)
   local1 <- data.frame(propo=xs, size=ys)
   aggregate(local1$size, list(propo=local1$propo), mean)
 }
@@ -30,8 +27,9 @@ ymax <- max(arcs1$x, arcs2$x)
 # plot info about data1
 plot(arcs1$propo, arcs1$x, type="b", col='red'
 	, pch=4
-	, xlab='|MWE derivation| / |Regular derivation|'
-	, ylim=c(ymin,ymax)
+	, xlab='sentence length'
+	# , ylim=c(ymin,ymax)
+	, ylim=c(0.3,ymax)
 	, ylab='% of the arcs explored' )
 
 # plot info about data2
