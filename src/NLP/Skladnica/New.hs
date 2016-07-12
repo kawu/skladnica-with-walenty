@@ -106,57 +106,61 @@ runExperiment GlobalCfg{..} = do
                && AStar._dagID p == Left begSym
         getWeight e = AStar.priWeight e + AStar.estWeight e
 
-    -- Column: sentence length
-    liftIO $ putStr (show sentLen)
-
     -- Find the reference derivation trees corresponding to the syntactic trees
     refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
     refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
 
-    -- Columns: reg-deriv-size and mwe-deriv-size
-    liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
-    liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
+    -- Don't need any more MaybeT capabilities
+    lift $ do
 
-    -- Build the local grammar (simple form of super-tagging)
-    let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
-        localGram = if restrictGrammar then buildGram localETs else globGram
+      -- Column: sentence length
+      liftIO $ putStr (show sentLen)
 
-    -- Used to control the state of the parsing process
-    contRef <- liftIO $ newIORef None
+      -- Columns: reg-deriv-size and mwe-deriv-size
+      liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
+      liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
 
-    -- We have to hoist the parsing pipe to `MaybeT`
-    let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
-    hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
-      let item = AStar.modifItem hypeModif
-          itemWeight = AStar.modifTrav hypeModif
-          hype = AStar.modifHype hypeModif
-      void . runMaybeT $ do
-        cont <- liftIO (readIORef contRef)
-        case cont of
-          None -> do
-            AStar.ItemP p <- return item
-            E.guard (final p)
-            liftIO . writeIORef contRef . Some $ getWeight itemWeight
-          Some optimal -> do
-            guard $ getWeight itemWeight > optimal
-            -- the first time that the optimal weight is surpassed
-            liftIO $ do
-              writeIORef contRef Done
-              -- Columns: hype stats at checkpoint 1
-              printHypeStats hype
-              -- Column: are ref. derivations encoded in the graph
-              let encodes = Deriv.encodes hype begSym sentLen
-              putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
-              putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-          Done -> return ()
+      -- Build the local grammar (simple form of super-tagging)
+      let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
+          localGram = if restrictGrammar then buildGram localETs else globGram
 
-    -- Columns: hype stats at the end, are ref. derivations encoded in the graph
-    liftIO $ do
-      printHypeStats hypeFini
-      let encodes = Deriv.encodes hypeFini begSym sentLen
-      putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
-      putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-      putStrLn ""
+      -- Used to control the state of the parsing process
+      contRef <- liftIO $ newIORef None
+
+      -- We have to hoist the parsing pipe to `MaybeT`; UPDATE: not anymore
+      -- let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
+      let pipe = Ext.parsePipe sent begSym localGram
+      hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
+        let item = AStar.modifItem hypeModif
+            itemWeight = AStar.modifTrav hypeModif
+            hype = AStar.modifHype hypeModif
+        void . runMaybeT $ do
+          cont <- liftIO (readIORef contRef)
+          case cont of
+            None -> do
+              AStar.ItemP p <- return item
+              E.guard (final p)
+              liftIO . writeIORef contRef . Some $ getWeight itemWeight
+            Some optimal -> do
+              guard $ getWeight itemWeight > optimal
+              -- the first time that the optimal weight is surpassed
+              liftIO $ do
+                writeIORef contRef Done
+                -- Columns: hype stats at checkpoint 1
+                printHypeStats hype
+                -- Column: are ref. derivations encoded in the graph
+                let encodes = Deriv.encodes hype begSym sentLen
+                putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+                putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+            Done -> return ()
+
+      -- Columns: hype stats at the end, are ref. derivations encoded in the graph
+      liftIO $ do
+        printHypeStats hypeFini
+        let encodes = Deriv.encodes hypeFini begSym sentLen
+        putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+        putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+        putStrLn ""
 
 
 -- -- | Run our full experiment.
