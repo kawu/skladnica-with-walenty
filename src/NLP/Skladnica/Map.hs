@@ -21,6 +21,7 @@ import           Control.Monad                 (forM_)
 import           Data.Either                   (lefts)
 import           Data.Maybe                    (mapMaybe)
 import qualified Data.Set                      as S
+import qualified Data.Map.Strict               as M
 import qualified Data.Text                     as T
 import qualified Data.Text.IO                  as T
 import           Data.Tree                     as R
@@ -121,7 +122,9 @@ mapMWEs MapCfg{..} = do
         let mweTree = Mapping.markSklTree (exprs1 ++ exprs2 ++ exprs3) sklTree
         T.putStrLn . MWE.renderXml $
           let path = drop (length skladnicaDir) skladnicaXML
-          in  MWE.outToXml [("file", T.pack path)] mweTree
+          in  MWE.outToXml
+              . MWE.Top mweTree
+              $ M.fromList [("file", T.pack path)]
     walentyInfo = genericInfo "walenty"
     sejfInfo = genericInfo "sejf"
     genericInfo orig = MWE.MweInfo

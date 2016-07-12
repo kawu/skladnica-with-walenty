@@ -35,9 +35,9 @@ data Command
       -- ^ MWE to Skladnica mapping
     | Parse FilePath
       -- ^ Only parse and show the input XML file
-    | Emboss FilePath
+    | Emboss FilePath New.SelectCfg
       -- ^ Mark MWEs as heads
-    | Extract FilePath String
+    | Extract FilePath String New.SelectCfg
       -- ^ Extract grammar from the input XML files
     | Full New.GlobalCfg
       -- ^ Perform the full experiment
@@ -73,6 +73,7 @@ globalCfgOptions = New.GlobalCfg
         ( long "term-type"
           <> short 'e'
           <> help "Type of terminals" )
+  <*> selectCfgOptions
 
 
 mapCfgOptions :: Parser Mapping.MapCfg
@@ -108,6 +109,15 @@ mapCfgOptions = Mapping.MapCfg
     joinWal m1 m2 = (,) <$> m1 <*> m2
 
 
+selectCfgOptions :: Parser New.SelectCfg
+selectCfgOptions = New.SelectCfg
+  <$> switch (long "no-walenty")
+  <*> switch (long "no-sejf")
+  <*> switch (long "no-nkjp")
+  <*> switch (long "no-dates")
+  <*> switch (long "only-sure-mwes")
+
+
 -- buildCfgParser :: Parser B.BuildCfg
 -- buildCfgParser = B.BuildCfg
 --   <$> option
@@ -134,7 +144,7 @@ parseOptions = Parse <$> treebankParser
 
 
 embossOptions :: Parser Command
-embossOptions = Emboss <$> treebankParser
+embossOptions = Emboss <$> treebankParser <*> selectCfgOptions
 
 
 extractOptions :: Parser Command
@@ -144,6 +154,7 @@ extractOptions = Extract
         ( long "start"
           <> short 's'
           <> help "Start symbol of the grammar" )
+  <*> selectCfgOptions
 
 
 -- testParserOptions :: Parser Command
@@ -356,8 +367,13 @@ run cmd =
   case cmd of
     Map cfg -> Mapping.mapMWEs cfg
     Parse path -> MweTree.parseAndPrint id path
-    Emboss path -> MweTree.parseAndPrint MweTree.emboss path
-    Extract path begSym -> void $ Extract.extractGrammar path begSym
+    Emboss path selCfg ->
+      let mweSel = New.compileSelect selCfg
+          modifyRoot = MweTree.modifyRoot (MweTree.emboss mweSel)
+      in  MweTree.parseAndPrint modifyRoot path
+    Extract path begSym selCfg ->
+      let mweSel = New.compileSelect selCfg
+      in  void $ Extract.extractGrammar path begSym mweSel
     Full cfg -> void $ New.runExperiment cfg
     -- TestParser path begSym -> Extract.testParser path begSym
 

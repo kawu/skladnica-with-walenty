@@ -16,6 +16,11 @@ module NLP.Skladnica.Walenty.MweTree
 , Reading (..)
 , cleanUp
 , emboss
+-- , embossTop
+
+-- * Top-level tree
+, Top (..)
+, modifyRoot
 
 -- * Conversion
 , InTree
@@ -68,8 +73,30 @@ import qualified NLP.Walenty.Types             as W
 --------------------------------------------------------------------------------
 
 
+-- -- | Skladnica tree marked with MWEs.
+-- data MweTree = MweTree
+--   { mweTree :: R.Tree MweNode
+--     -- ^ The MWE tree itself
+--   , mweTreeAtts :: M.Map T.Text T.Text
+--     -- ^ Top-level attributes of the tree
+--   } deriving (Show, Eq)
+
+
 -- | Skladnica tree marked with MWEs.
 type MweTree = R.Tree MweNode
+
+
+-- | Top-level tree with additional attributes.
+data Top t = Top
+  { topRoot :: t
+    -- ^ The underlying tree
+  , topAtts :: M.Map T.Text T.Text
+    -- ^ Top-level attributes of the tree
+  }
+
+-- | Modify the underlying rose tree.
+modifyRoot :: (a -> b) -> Top a -> Top b
+modifyRoot f top@Top{..} = top {topRoot = f topRoot}
 
 
 -- | A node of `MweTree`.
@@ -132,18 +159,17 @@ cleanUp R.Node{..} = R.Node
 
 
 -- | Mark the paths leading from MWE roots to the corresponding leaves, by
--- changing the values of `Skl.IsHead` to `Skl.HeadYes`.
-emboss :: MweTree -> MweTree
-emboss R.Node{..} = R.Node
+-- changing the values of `Skl.IsHead` to `Skl.HeadYes`.  Emboss only the
+-- MWEs whose meta-information satisfy the given predicate.
+emboss :: (MweInfo -> Bool) -> MweTree -> MweTree
+emboss mwePred R.Node{..} = R.Node
   { R.rootLabel = rootLabel
-  , R.subForest = mark (map emboss subForest) }
+  , R.subForest = mark (map (emboss mwePred) subForest) }
   where
-    mark = case mweSet rootLabel of
-      Nothing -> id
-      Just oc -> map $ fst . go (Q.markedSet oc)
---     mark
---       | S.null (mweSet rootLabel) = id
---       | otherwise = map $ fst . go (mweSet rootLabel)
+    mark = maybe id id $ do
+      oc <- mweSet rootLabel
+      Monad.guard . mwePred $ Q.exprInfo oc
+      return $ map $ fst . go (Q.markedSet oc)
     go mweIDs t
       | or found || getRootID t `S.member` mweIDs =
           ( t { R.rootLabel = markAsHead (R.rootLabel t)
@@ -153,6 +179,11 @@ emboss R.Node{..} = R.Node
       where
         pairs = map (go mweIDs) (R.subForest t)
         (children, found) = unzip pairs
+
+
+-- -- | Top-level `emboss`.
+-- embossTop :: (MweInfo -> Bool) -> Top MweTree -> Top MweTree
+-- embossTop p = modifyRoot (emboss p)
 
 
 ------------------------------------------------------------------------------
@@ -195,10 +226,11 @@ type XmlForest = Poly.XmlForest T.Text
 -- | Top-level conversion from a `MweTree` to an XML tree.
 -- The function takes as argument a list of attribute/value
 -- pairs that will be assigned to the top-level <tree> node.
-rootToXml :: [(T.Text, T.Text)] -> MweTree -> XmlTree
-rootToXml atts root = R.Node
-  { R.rootLabel = Tag.TagOpen "tree" atts
-  , R.subForest = [mweTreeXml root ]}
+-- rootToXml :: [(T.Text, T.Text)] -> MweTree -> XmlTree
+rootToXml :: Top MweTree -> XmlTree
+rootToXml Top{..} = R.Node
+  { R.rootLabel = Tag.TagOpen "tree" (M.toList topAtts)
+  , R.subForest = [mweTreeXml topRoot ]}
 
 
 -- | Convert a `MweTree` to an XML tree.
@@ -340,13 +372,19 @@ type Q a = Poly.Q (Poly.XmlTree L.Text) a
 
 
 -- | Top-level parser
-topP :: P [MweTree]
+topP :: P [Top MweTree]
 topP = every' topTreeQ
 
 
 -- | Tree parser
-topTreeQ :: Q MweTree
-topTreeQ = named "tree" `joinR` first treeQ
+topTreeQ :: Q (Top MweTree)
+topTreeQ = (named "tree" *> atts) `join`
+  \as -> do
+    t <- first treeQ
+    let toStrict = map
+          ( Arr.first L.toStrict
+          . Arr.second L.toStrict )
+    return $ Top t (M.fromList $ toStrict as)
 
 
 -- | (Sub)tree parser
@@ -456,13 +494,13 @@ atomQ name = L.toStrict <$> named name `joinR` first (node text)
 
 
 -- | Parse an XML string into a sequence of `MweTree`s.
-parseTop :: L.Text -> [MweTree]
+parseTop :: L.Text -> [Top MweTree]
 parseTop =
     F.concat . evalP topP . parseForest . Tag.parseTags
 
 
 -- | Read an XML file into a sequence of `MweTree`s.
-readTop :: FilePath -> IO [MweTree]
+readTop :: FilePath -> IO [Top MweTree]
 readTop path = parseTop <$> L.readFile path
 
 
@@ -474,13 +512,15 @@ readTop path = parseTop <$> L.readFile path
 -- | Functions which just parses and prints the given XML file
 -- with MWE-marked trees.  It takes a single argument which
 -- allows to modify the individual MWE trees.
-parseAndPrint :: (MweTree -> MweTree) -> FilePath -> IO ()
+parseAndPrint :: (Top MweTree -> Top MweTree) -> FilePath -> IO ()
 parseAndPrint f path = do
   mweTrees <- map f <$> readTop path
-  mapM_ (T.putStrLn . renderXml . rootToXml []) mweTrees
+  mapM_ (T.putStrLn . renderXml . rootToXml) mweTrees
 
 
 -- | A function which combines several lower-level functions and produces an XML
 -- tree (in textual form) from a MWE->Skladnica mapping output.
-outToXml :: [(T.Text, T.Text)] -> OutTree -> XmlTree
-outToXml atts = rootToXml atts . cleanUp . fromOut
+outToXml :: Top OutTree -> XmlTree
+outToXml = rootToXml . modifyRoot (cleanUp . fromOut)
+-- outToXml :: [(T.Text, T.Text)] -> OutTree -> XmlTree
+-- outToXml atts = rootToXml atts . cleanUp . fromOut

@@ -112,21 +112,23 @@ emptyExtract = Extract G.empty M.empty
 -- | Extract TAG grammar from the input XML treebank.
 fromFile
   :: TermType
+  -> (MWE.MweInfo -> Bool)
   -> FilePath
   -> IO Extract
-fromFile termTyp skladnicaXML = do
+fromFile termTyp mwePred skladnicaXML = do
   trees <- MWE.readTop skladnicaXML
   flip E.execStateT emptyExtract $ do
     forM_ trees $ \sklTree0 -> do
-      let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
-          sklTree = fmap MWE.sklNode sklTree0
-          sklETs = G.extractGrammar sklTree
-          mweETs = G.extractGrammar mweTree
+      -- let mweTree = fmap MWE.sklNode (MWE.embossTop mwePred sklTree0)
+      let mweTree = MWE.modifyRoot (fmap MWE.sklNode . MWE.emboss mwePred) sklTree0
+          sklTree = MWE.modifyRoot (fmap MWE.sklNode) sklTree0
+          sklETs = G.extractGrammar $ MWE.topRoot sklTree
+          mweETs = G.extractGrammar $ MWE.topRoot mweTree
           est = sklETs `S.union` mweETs
       when (S.null est) $ do
         liftIO $ putStrLn "WARNING: something went wrong..."
       E.modify' $ \st ->
-        let newFreqMap = freqMapFrom termTyp sklTree
+        let newFreqMap = freqMapFrom termTyp $ MWE.topRoot sklTree
             force = seq . length . show
         in  force (est, newFreqMap) $ st
             { gramSet = S.union (gramSet st) est
@@ -233,37 +235,39 @@ findDeriv maxNum begSym termTyp sklTree = do
 extractGrammar
   :: FilePath -- ^ Składnica XML file
   -> String   -- ^ Start symbol
+  -> (MWE.MweInfo -> Bool)
   -> IO Extract
-extractGrammar skladnicaXML begSym0 = do
+extractGrammar skladnicaXML begSym0 mwePred = do
   trees <- MWE.readTop skladnicaXML
   flip E.execStateT emptyExtract $ do
     forM_ trees $ \sklTree0 -> do
-      let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
-          sklTree = fmap MWE.sklNode sklTree0
-          sklETs = G.extractGrammar sklTree
-          mweETs = G.extractGrammar mweTree
+      let mweTree = MWE.modifyRoot (fmap MWE.sklNode . MWE.emboss mwePred) sklTree0
+          sklTree = MWE.modifyRoot (fmap MWE.sklNode) sklTree0
+          sklETs = G.extractGrammar $ MWE.topRoot sklTree
+          mweETs = G.extractGrammar $ MWE.topRoot mweTree
           est = sklETs `S.union` mweETs
       liftIO $ do
         when (S.null est) $ putStrLn "ERROR: something went wrong..."
         putStrLn $ "===========================================\n"
-        T.putStrLn $ "# PARSING: " `T.append` T.unwords (_orthForms sklTree)
+        T.putStrLn $ "# PARSING: " `T.append`
+          T.unwords (_orthForms $ MWE.topRoot sklTree)
         putStrLn $ "# SKLADNICA DEPENDENCY TREE:\n"
 
       -- reference dependency tree
       let putRose = putStrLn . R.drawTree . fmap show
-          refTree = canonize . asDepTree . tokenize $ mweTree -- sklTree
+          refTree = canonize . asDepTree . tokenize . MWE.topRoot $ mweTree
       liftIO $ mapM_ (putRose . Dep.toRose) (S.toList refTree)
 
       -- computing the set of derivations
       let maxLength = 1000000 -- TODO: make it a parameter
       derivList <- liftIO $ take maxLength
-        <$> parse (_baseForms sklTree) (T.pack begSym0) est
+        <$> parse (_baseForms $ MWE.topRoot sklTree) (T.pack begSym0) est
       let derivNum = length derivList
       liftIO . putStrLn $
         "# NO. OF DERIVATIONS: " ++ show derivNum ++
         if derivNum == maxLength then "+" else ""
 
-      let derivTreeMay = miniDerivOf derivList mweTree
+      let derivTreeMay = miniDerivOf derivList $ MWE.topRoot mweTree
       case derivTreeMay of
         Nothing -> liftIO $ do
           putStrLn "# THE CORRESPONDING DERIVATION NOT FOUND"
