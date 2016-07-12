@@ -125,9 +125,12 @@ fromFile termTyp skladnicaXML = do
           est = sklETs `S.union` mweETs
       when (S.null est) $ do
         liftIO $ putStrLn "WARNING: something went wrong..."
-      E.modify' $ \st -> st
-        { gramSet = gramSet st `S.union` est
-        , freqMap = M.unionWith (+) (freqMap st) (freqMapFrom termTyp sklTree) }
+      E.modify' $ \st ->
+        let newFreqMap = freqMapFrom termTyp sklTree
+            force = seq . length . show
+        in  force (est, newFreqMap) $ st
+            { gramSet = S.union (gramSet st) est
+            , freqMap = M.unionWith (+) (freqMap st) newFreqMap }
 
 
 -- | Parse the given sentence with the given grammar.
