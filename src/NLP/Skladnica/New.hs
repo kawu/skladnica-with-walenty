@@ -159,6 +159,120 @@ runExperiment GlobalCfg{..} = do
       putStrLn ""
 
 
+-- -- | Run our full experiment.
+-- runExperiment :: GlobalCfg -> IO ()
+-- runExperiment GlobalCfg{..} = do
+-- 
+--   putStrLn "\n===== GRAMMAR EXTRACTION =====\n"
+--   extract <- Ext.fromFile termTyp skladnicaXML
+-- 
+--   putStrLn "\n===== EXTRACTED GRAMMAR =====\n"
+--   forM_ (S.toList $ Ext.gramSet extract) $
+--     putStrLn . R.drawTree . fmap show
+-- 
+--   -- grammar-building function
+--   let buildGram = if useFreqs
+--                   then Ext.buildFreqGram (Ext.freqMap extract)
+--                   else Ext.buildGram
+-- 
+--   -- single global grammar for all
+--   let globGram = buildGram (Ext.gramSet extract)
+-- 
+--   putStrLn "\n===== PARSING TESTS =====\n"
+--   skladnica <- MWE.readTop skladnicaXML
+-- 
+--   putStr "sent-length,reg-deriv-size,mwe-deriv-size,"
+--   putStr "chart-nodes-1,chart-arcs-1,agenda-nodes-1,agenda-arcs-1,"
+--   putStr "encodes-reg-1,encodes-mwe-1,"
+--   putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2,"
+--   putStr "encodes-reg-2,encodes-mwe-2"
+--   putStrLn ""
+-- 
+--   -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
+--   forM_ skladnica $ \sklTree0 -> runMaybeT $ do
+-- 
+--     -- First we construct two versions of the syntactic tree: one compositional,
+--     -- one which assumes MWE interpretations.
+--     let sklTree = fmap MWE.sklNode sklTree0
+--         mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
+-- 
+--     -- Stop if the two versions are identical.
+--     guard $ mweTree /= sklTree
+-- 
+--     -- Some utility "variables"
+--     let sent = Ext.wordForms termTyp sklTree
+--         sentLen = length sent
+--         final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
+--                && AStar._dagID p == Left begSym
+--         getWeight e = AStar.priWeight e + AStar.estWeight e
+-- 
+--     -- DEBUG: sentence
+--     liftIO . T.putStrLn $ T.unwords sent
+-- 
+--     -- Column: sentence length
+--     liftIO $ putStr (show sentLen)
+-- 
+--     -- Find the reference derivation trees corresponding to the syntactic trees
+--     refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
+--     refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
+-- 
+--     -- DEBUG:
+--     let putRose = putStrLn . R.drawTree . fmap show
+--         refDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
+--     liftIO . putRose . Dep.toRose $ refDepTree
+-- 
+-- --     -- Columns: reg-deriv-size and mwe-deriv-size
+-- --     liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
+-- --     liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
+-- 
+--     -- Build the local grammar (simple form of super-tagging)
+--     let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
+--         localGram = if restrictGrammar then buildGram localETs else globGram
+-- 
+--     -- Used to control the state of the parsing process
+--     contRef <- liftIO $ newIORef None
+-- 
+--     -- We have to hoist the parsing pipe to `MaybeT`
+--     let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
+--     hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
+--       let item = AStar.modifItem hypeModif
+--           itemWeight = AStar.modifTrav hypeModif
+--           hype = AStar.modifHype hypeModif
+--       void . runMaybeT $ do
+--         cont <- liftIO (readIORef contRef)
+--         case cont of
+--           None -> do
+--             AStar.ItemP p <- return item
+--             E.guard (final p)
+--             liftIO . writeIORef contRef . Some $ getWeight itemWeight
+--           Some optimal -> do
+--             guard $ getWeight itemWeight > optimal
+--             -- the first time that the optimal weight is surpassed
+--             liftIO $ do
+--               writeIORef contRef Done
+-- --               -- Columns: hype stats at checkpoint 1
+-- --               printHypeStats hype
+--               -- Column: are ref. derivations encoded in the graph
+--               let encodes = Deriv.encodes hype begSym sentLen
+-- --               putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+-- --               putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+--               if encodes refMweDeriv
+--                 then return ()
+--                 else do
+--                   let curDerTree = head $ Deriv.derivTrees hype begSym sentLen
+--                       curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
+--                   liftIO . putRose . Dep.toRose $ curDepTree
+--           Done -> return ()
+-- 
+--     -- Columns: hype stats at the end, are ref. derivations encoded in the graph
+--     liftIO $ do
+--       printHypeStats hypeFini
+--       let encodes = Deriv.encodes hypeFini begSym sentLen
+--       putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+--       putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+--       putStrLn ""
+
+
 ------------------------------------------------------------------------------
 -- Utils
 --------------------------------------------------------------------------------
