@@ -87,12 +87,14 @@ mapMWEs MapCfg{..} = do
   sejf0 <- case maySejfPath of
     Just sejfPath -> Sejf.readSejf sejfPath
     Nothing -> return []
-  let sejf = sejfPartition Sejf.orth sejf0
+  -- TODO: it's not nice that we have to specify case sensitivity
+  -- in many places, this leads to problems
+  let sejf = sejfPartition Sejf.IgnoreCase Sejf.orth sejf0
   -- read NCP-NEs dictionary
   nes0 <- nubOrd <$> case mayNcpPath of
     Just ncpPath -> NE.nesInCorpus ncpPath
     Nothing -> return []
-  let nes = sejfPartition NE.orth nes0
+  let nes = sejfPartition Sejf.CaseSensitive NE.orth nes0
   -- per each XML file...
   xmlFiles <- getXmlFiles skladnicaDir
   forM_ xmlFiles (procPath walenty sejf nes)
@@ -106,7 +108,10 @@ mapMWEs MapCfg{..} = do
           sejf =
             [ entry
             | (entry, wordSet) <- sejf0
-            , wordSet `S.isSubsetOf` sentSet ]
+            -- , wordSet `S.isSubsetOf` sentSet ]
+            -- TODO: and again, below, we have to account for potential case...
+            , wordSet `S.isSubsetOf`
+              (S.fromList . map T.toCaseFold . S.toList) sentSet ]
           nes =
             [ entry
             | (entry, wordSet) <- nes0
@@ -174,13 +179,20 @@ forestFromXml xml = do
 -- | Use `Sejf.partition` to determine component words and put them (under the
 -- form of a set) on the second position of the corresponding list elements.
 -- Preserve only these entries which have more than one component words.
-sejfPartition :: (a -> T.Text) -> [a] -> [(a, S.Set T.Text)]
--- sejfPartition f = map $ \x -> (x, S.fromList . Sejf.partition . f $ x)
-sejfPartition f xs =
+sejfPartition
+  :: Sejf.CaseSensitivity
+  -> (a -> T.Text)
+  -> [a]
+  -> [(a, S.Set T.Text)]
+sejfPartition caseSens f xs =
   [ (x, wordSet)
   | x <- xs
-  , let wordSet = S.fromList . Sejf.partition . f $ x
+  , let wordSet = S.fromList . Sejf.partition . withCase . f $ x
   , S.size wordSet > 1 ]
+  where
+    withCase = case caseSens of
+      Sejf.CaseSensitive -> id
+      Sejf.IgnoreCase -> T.toCaseFold
 
 
 --------------------------------------------------

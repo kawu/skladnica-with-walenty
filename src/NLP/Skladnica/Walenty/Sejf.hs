@@ -103,8 +103,9 @@ querifyOrth caseSens orth = E.andQ
     -- take into account case sensitivity
     withCase = case caseSens of
       CaseSensitive -> id
-      IgnoreCase -> T.toLower
-    casedOrthParts = map withCase (partition orth)
+      IgnoreCase -> T.toCaseFold
+    -- casedOrthParts = map withCase (partition orth)
+    casedOrthParts = partition (withCase orth)
 
 
 --------------------------------------------------------------------------------
@@ -137,7 +138,7 @@ querifyOrth' caseSens orth = E2.andQ
       where
         leaves = map S.orth . Map.terminals
     -- check that at leat one of the MWE componenets is on the trunk.
-    checkTrunk = Map.trunk . Map.hasOrth $ \word ->
+    checkTrunk = Map.trunk . Map.hasOrth $ \word -> 
       withCase word `elem` casedOrthParts
     -- TODO: note that `markLeaves` can mark more than identified
     -- with `checkLeaves`!
@@ -148,8 +149,9 @@ querifyOrth' caseSens orth = E2.andQ
     -- take into account case sensitivity
     withCase = case caseSens of
       CaseSensitive -> id
-      IgnoreCase -> T.toLower
-    casedOrthParts = map withCase (partition orth)
+      IgnoreCase -> T.toCaseFold
+    -- casedOrthParts = map withCase (partition orth)
+    casedOrthParts = partition (withCase orth)
 
 
 --------------------------------------------------------------------------------

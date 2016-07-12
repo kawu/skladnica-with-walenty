@@ -446,6 +446,7 @@ data TermType = Orth | Base
 -- | Retrieve terminal orth forms from the given syntactic tree.
 wordForms :: TermType -> SklTree -> [T.Text]
 wordForms tt = case tt of
+  -- TODO: shouldn't it be lowercased/toCaseFolded?
   Orth -> _orthForms
   Base -> _baseForms
 
