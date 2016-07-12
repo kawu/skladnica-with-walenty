@@ -1,10 +1,10 @@
 # read file name and data from .csv file
 args <- commandArgs(trailingOnly = TRUE)
-data <- read.csv(file=args, sep=",")
+data <- read.csv(file=args[1], sep=",")
 
 # plot to window or to file?
-x11()
-# dev.new(width=7, height=4)
+# x11()
+pdf(args[2],width=7,height=4)
 
 # margins?
 # par(mar=c(4,4,1,1))
@@ -19,7 +19,8 @@ aggr <- aggregate(local$size, list(length=local$length), mean)
 # plot info about nodes
 plot(aggr$length, aggr$x, type="b", col='green'
 	, pch=4
-	, xlab='(a)\n'
+	# , xlab='(a)\n'
+	, xlab='sentence length'
 	# , xlim=c(1,20)
 	, ylim=c(0.5,0.95)
 	, ylab='% of the hypergraph explored' )
@@ -38,5 +39,6 @@ legend('bottom',
        pch=c(4, 1),
        cex=1.0, pt.cex = 1, bty='n', lty=1)
 
-Sys.sleep(10)
-dev.off()
+# useful if plotting to window:
+# Sys.sleep(10)
+# dev.off()
