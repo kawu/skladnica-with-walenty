@@ -5,28 +5,31 @@ data <- read.csv(file=args[1], sep=",")
 # plot to PDF file
 pdf(args[2],width=7,height=4)
 
-# stats in local variables
+# stats about nodes
 xs <- data$mwe.deriv.size / data$reg.deriv.size
 ys <- (data$chart.nodes.1 + data$agenda.nodes.1) / data$chart.nodes.2
-# ys <- data$chart.nodes.1 + data$agenda.nodes.1
 local <- data.frame(length=xs, size=ys)
-aggr <- aggregate(local$size, list(length=local$length), mean)
+nodes <- aggregate(local$size, list(length=local$length), mean)
+
+# stats about arcs
+ys <- (data$chart.arcs.1 + data$agenda.arcs.1) / data$chart.arcs.2
+local <- data.frame(length=xs, size=ys)
+arcs <- aggregate(local$size, list(length=local$length), mean)
+
+ymin <- min(nodes$x, arcs$x)
+ymax <- max(nodes$x, arcs$x)
 
 # plot info about nodes
-plot(aggr$length, aggr$x, type="b", col='green'
+plot(nodes$length, nodes$x, type="b", col='green'
 	, pch=4
 	# , xlab='(a)\n'
 	, xlab='|MWE derivation| / |Regular derivation|'
 	# , xlim=c(1,20)
-	, ylim=c(0.4,1.0)
+	, ylim=c(ymin,ymax)
 	, ylab='% of the hypergraph explored' )
 
-
-# compute and plot info about arcs
-ys <- (data$chart.arcs.1 + data$agenda.arcs.1) / data$chart.arcs.2
-local <- data.frame(length=xs, size=ys)
-aggr <- aggregate(local$size, list(length=local$length), mean)
-lines(aggr$length, aggr$x, type="b", col='red', pch=1)
+# plot info about arcs
+lines(arcs$length, arcs$x, type="b", col='red', pch=1)
 
 # add the legend
 legend('bottom',
