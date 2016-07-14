@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE LambdaCase   #-}
 
 
 module NLP.Skladnica.New
@@ -17,6 +18,7 @@ import qualified Control.Monad.State.Strict    as E
 import           Control.Monad.Trans.Maybe     (MaybeT (..))
 
 import           Data.IORef
+import           Data.Maybe (fromJust)
 import qualified Data.Map.Strict               as M
 import qualified Data.Set                      as S
 import           Data.Text                     (Text)
@@ -25,6 +27,8 @@ import qualified Data.Text.IO                  as T
 import qualified Data.Tree                     as R
 
 import           Pipes
+-- import qualified System.TimeIt                 as TimeIt
+import           System.CPUTime
 
 import qualified NLP.Partage.AStar             as AStar
 import qualified NLP.Partage.AStar.Deriv       as Deriv
@@ -43,7 +47,7 @@ data GlobalCfg = GlobalCfg
     -- ^ Restrict (supertag) the grammar to match
     -- the individual sentences?
   , useFreqs        :: Bool
-    -- ^ Use frequencies to customize heuristic?
+    -- ^ Use frequencies to customize the heuristic?
   , begSym          :: Text
     -- ^ Start symbol
   , maxDerivNum     :: Int
@@ -95,7 +99,7 @@ runExperiment GlobalCfg{..} = do
   putStr "chart-nodes-1,chart-arcs-1,agenda-nodes-1,agenda-arcs-1,"
   putStr "encodes-reg-1,encodes-mwe-1,"
   putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2,"
-  putStr "encodes-reg-2,encodes-mwe-2"
+  putStr "encodes-reg-2,encodes-mwe-2,time-fst,time-1,time-2"
   putStrLn ""
 
   -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
@@ -142,6 +146,13 @@ runExperiment GlobalCfg{..} = do
       -- Used to control the state of the parsing process
       contRef <- liftIO $ newIORef None
 
+      -- Start measuring the execution time
+      timeBeg <- liftIO getCPUTime
+      -- CPU time at the first item pulled from the pipe
+      timeFstRef <- liftIO $ newIORef Nothing
+      -- CPU time at the checkpoint
+      timeCheckRef <- liftIO $ newIORef 0
+
       -- We have to hoist the parsing pipe to `MaybeT`; UPDATE: not anymore
       -- let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
       let pipe = Ext.parsePipe sent begSym localGram
@@ -153,6 +164,9 @@ runExperiment GlobalCfg{..} = do
           cont <- liftIO (readIORef contRef)
           case cont of
             None -> do
+              liftIO $ readIORef timeFstRef >>= \case
+                Nothing -> writeIORef timeFstRef . Just =<< getCPUTime
+                Just _ -> return ()
               AStar.ItemP p <- return item
               E.guard (final p)
               liftIO . writeIORef contRef . Some $ getWeight itemWeight
@@ -160,6 +174,8 @@ runExperiment GlobalCfg{..} = do
               guard $ getWeight itemWeight > optimal
               -- the first time that the optimal weight is surpassed
               liftIO $ do
+                -- Checkpoint execution time
+                writeIORef timeCheckRef =<< getCPUTime
                 writeIORef contRef Done
                 -- Columns: hype stats at checkpoint 1
                 printHypeStats hype
@@ -169,12 +185,25 @@ runExperiment GlobalCfg{..} = do
                 putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
             Done -> return ()
 
-      -- Columns: hype stats at the end, are ref. derivations encoded in the graph
+      -- Execution times
+      timeFst <- liftIO $ fromJust <$> readIORef timeFstRef
+      timeCheck <- liftIO $ readIORef timeCheckRef
+      timeEnd <- liftIO getCPUTime
+      let timeFstInMs, timeCheckInMs, timeEndInMs :: Double
+          timeFstInMs = fromIntegral (timeFst - timeBeg) * 1e-9
+          timeCheckInMs = fromIntegral (timeCheck - timeBeg) * 1e-9
+          timeEndInMs = fromIntegral (timeEnd - timeBeg) * 1e-9
+
+      -- Columns: hype stats at the end, are ref. derivations encoded in
+      -- the graph, and time execution measurments;
       liftIO $ do
         printHypeStats hypeFini
         let encodes = Deriv.encodes hypeFini begSym sentLen
         putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
         putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+        putStr $ "," ++ show timeFstInMs
+        putStr $ "," ++ show timeCheckInMs
+        putStr $ "," ++ show timeEndInMs
         putStrLn ""
 
 

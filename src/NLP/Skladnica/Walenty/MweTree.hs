@@ -437,7 +437,8 @@ mweQ = (named "mwe" *> mweInfoQ) `join` \mweInfo -> do
     readReading "idiomatic" = Just Idiomatic
     readReading "compositional" = Just Compositional
     readReading "error" = Just Error
-    readReading _ = Nothing
+    readReading "unknown" = Nothing
+    readReading x = error $ "mweQ.readReading: unknown reading value " ++ L.unpack x
 
 
 -- | Single MWE parser.
