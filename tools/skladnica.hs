@@ -41,6 +41,8 @@ data Command
       -- ^ Extract grammar from the input XML files
     | Full New.GlobalCfg
       -- ^ Perform the full experiment
+    | Full2 New.GlobalCfg
+      -- ^ Perform the full experiment
 
 
 -- parseCompression :: Monad m => String -> m B.Compress
@@ -314,6 +316,10 @@ opts = subparser
             (info (helper <*> (Full <$> globalCfgOptions))
                 (progDesc "Perform the full experiment")
                 )
+        <> command "full2"
+            (info (helper <*> (Full2 <$> globalCfgOptions))
+                (progDesc "Perform the full experiment")
+                )
 --         <> command "test-parser"
 --             (info (helper <*> testParserOptions)
 --                 (progDesc "Test parser (provisional)")
@@ -375,6 +381,7 @@ run cmd =
       let mweSel = New.compileSelect selCfg
       in  void $ Extract.extractGrammar path begSym mweSel
     Full cfg -> void $ New.runExperiment cfg
+    Full2 cfg -> void $ New.runExperiment cfg
     -- TestParser path begSym -> Extract.testParser path begSym
 
 --          Trees buildData ->
