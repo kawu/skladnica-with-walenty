@@ -179,7 +179,6 @@ parsePipe sent begSym gram =
 miniDerivOf :: [DerTree] -> SklTree -> Maybe DerTree
 miniDerivOf derivList sklTree =
   let depTree = canonize . asDepTree . tokenize $ sklTree
-      derivSize = Gorn.size . Gorn.fromDeriv
       minimumBy' cmp xs = case xs of
         [] -> Nothing
         _  -> Just $ minimumBy cmp xs

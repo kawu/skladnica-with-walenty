@@ -1,6 +1,6 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE LambdaCase   #-}
 
 
 module NLP.Skladnica.New
@@ -19,8 +19,10 @@ import qualified Control.Monad.State.Strict    as E
 import           Control.Monad.Trans.Maybe     (MaybeT (..))
 
 import           Data.IORef
-import           Data.Maybe (fromJust)
+import           Data.List                     (minimumBy)
 import qualified Data.Map.Strict               as M
+import           Data.Maybe                    (fromJust)
+import           Data.Ord                      (comparing)
 import qualified Data.Set                      as S
 import           Data.Text                     (Text)
 import qualified Data.Text                     as T
@@ -40,8 +42,8 @@ import qualified NLP.Skladnica.Walenty.MweTree as MWE
 import qualified NLP.Skladnica.Walenty.Select  as Select
 
 -- DEBUG
-import qualified NLP.Partage.AStar.Deriv.Gorn  as Gorn
 import qualified NLP.Partage.AStar.DepTree     as Dep
+import qualified NLP.Partage.AStar.Deriv.Gorn  as Gorn
 
 
 -- | Experiment configuration
@@ -62,6 +64,8 @@ data GlobalCfg = GlobalCfg
     -- ^ What type of terminals use in the experiments
   , selectCfg       :: SelectCfg
     -- ^ MWE selection configuration
+  , selectFiles     :: [Text]
+    -- ^ Perform the experiment on selected Skladnica trees only
   }
   deriving (Show)
 
@@ -71,13 +75,16 @@ data GlobalCfg = GlobalCfg
 data Result a
   = None
   | Some a
-  | Done
+  | Done a
   deriving (Show, Eq, Ord)
 
 
 -- | Run our full experiment.
 runExperiment2 :: GlobalCfg -> IO ()
 runExperiment2 GlobalCfg{..} = do
+
+  -- Ronding function
+  let roundIt x = x `roundTo` 10
 
   -- MWE selection predicate
   let mweSelect = compileSelect selectCfg
@@ -110,6 +117,12 @@ runExperiment2 GlobalCfg{..} = do
   -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
   forM_ skladnica $ \sklTree0 -> runMaybeT $ do
 
+    -- Choose a Skladnica tree to perform the experiment on (if
+    -- specified in the global config)
+    let fileName = T.map escComma . maybe "_" id . M.lookup "file"
+        escComma c = case c of ',' -> '.' ; _ -> c
+    guard $ null selectFiles || fileName (MWE.topAtts sklTree0) `elem` selectFiles
+
     -- First we construct two versions of the syntactic tree: one compositional,
     -- one which assumes MWE interpretations.
     let sklTree = fmap MWE.sklNode $ MWE.topRoot sklTree0
@@ -123,7 +136,8 @@ runExperiment2 GlobalCfg{..} = do
         sentLen = length sent
         final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                && AStar._dagID p == Left begSym
-        getWeight e = AStar.priWeight e + AStar.estWeight e
+        -- getWeight e = AStar.priWeight e + AStar.estWeight e
+        getWeight = AStar.totalWeight
 
     -- Find the reference derivation trees corresponding to the syntactic trees
     refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
@@ -133,8 +147,6 @@ runExperiment2 GlobalCfg{..} = do
     lift $ do
 
       -- Column: file name (if in meta-attributes)
-      let fileName = T.map escComma . maybe "_" id . M.lookup "file"
-          escComma c = case c of ',' -> '.' ; _ -> c
       liftIO $ T.putStr (fileName $ MWE.topAtts sklTree0)
 
       -- Column: sentence length
@@ -166,8 +178,15 @@ runExperiment2 GlobalCfg{..} = do
             itemWeight = AStar.modifTrav hypeModif
             hype = AStar.modifHype hypeModif
         void . runMaybeT $ do
+
+          -- Check if the modification corresponds to a new node (item)
+          -- popped from the parsing agenda.  New hyperarcs are of no
+          -- interest to us here.
+          E.guard (AStar.modifType hypeModif == AStar.NewNode)
+
           cont <- liftIO (readIORef contRef)
           case cont of
+
             None -> do
               liftIO $ readIORef timeFstRef >>= \case
                 Nothing -> writeIORef timeFstRef . Just =<< getCPUTime
@@ -175,13 +194,31 @@ runExperiment2 GlobalCfg{..} = do
               AStar.ItemP p <- return item
               E.guard (final p)
               liftIO . writeIORef contRef . Some $ getWeight itemWeight
+--               liftIO $ do
+--                 putStrLn "Optimal info:"
+--                 AStar.printItem item hype
+--                 print
+--                   ( AStar.priWeight itemWeight
+--                   , AStar.estWeight itemWeight
+--                   , AStar.gapWeight itemWeight )
+--                 print (AStar.totalWeight itemWeight)
+
             Some optimal -> do
-              guard $ getWeight itemWeight > optimal
+              guard $ roundIt (getWeight itemWeight) > roundIt optimal
+--               liftIO $ do
+--                 putStrLn "Some info:"
+--                 AStar.printItem item hype
+--                 print
+--                   ( AStar.priWeight itemWeight
+--                   , AStar.estWeight itemWeight
+--                   , AStar.gapWeight itemWeight )
+--                 print (AStar.totalWeight itemWeight)
+
               -- the first time that the optimal weight is surpassed
               liftIO $ do
                 -- Checkpoint execution time
                 writeIORef timeCheckRef =<< getCPUTime
-                writeIORef contRef Done
+                writeIORef contRef (Done optimal)
                 -- Columns: hype stats at checkpoint 1
                 printHypeStats hype
                 -- Column: are ref. derivations encoded in the graph
@@ -191,15 +228,25 @@ runExperiment2 GlobalCfg{..} = do
                 if encodes refMweDeriv
                   then return ()
                   else do
-                    let curDerTree = head $ Deriv.derivTrees hype begSym sentLen
+                    let curDerTrees = Deriv.derivTrees hype begSym sentLen
+                        curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
                         curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
                         mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
                         putRose = putStrLn . R.drawTree . fmap show
                     putStrLn "Reference MWE derivation:"
                     putRose . Dep.toRose $ mweDepTree
-                    putStrLn "Found derivation:"
+                    putStrLn "Minimal found derivation:"
                     putRose . Dep.toRose $ curDepTree
-            Done -> return ()
+--                     putStrLn "Found derivations:"
+--                     forM_ curDerTrees $ \derTree -> do
+--                       let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
+--                       putRose . Dep.toRose $ depTree
+
+            Done optimal -> if roundIt (getWeight itemWeight) <= roundIt optimal then do
+              liftIO $ putStrLn "ERROR!!! the weight got at the level of optimal again!!!"
+              liftIO $ putStr "OPTIMAL: " >> print optimal
+              liftIO $ putStr "CURRENT: " >> print (getWeight itemWeight)
+              else return ()
 
       -- Execution times
       timeFst <- liftIO $ fromJust <$> readIORef timeFstRef
@@ -271,7 +318,8 @@ runExperiment GlobalCfg{..} = do
         sentLen = length sent
         final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
                && AStar._dagID p == Left begSym
-        getWeight e = AStar.priWeight e + AStar.estWeight e
+        -- getWeight e = AStar.priWeight e + AStar.estWeight e
+        getWeight = AStar.totalWeight
 
     -- Find the reference derivation trees corresponding to the syntactic trees
     refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
@@ -329,14 +377,14 @@ runExperiment GlobalCfg{..} = do
               liftIO $ do
                 -- Checkpoint execution time
                 writeIORef timeCheckRef =<< getCPUTime
-                writeIORef contRef Done
+                writeIORef contRef (Done optimal)
                 -- Columns: hype stats at checkpoint 1
                 printHypeStats hype
                 -- Column: are ref. derivations encoded in the graph
                 let encodes = Deriv.encodes hype begSym sentLen
                 putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
                 putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-            Done -> return ()
+            Done _ -> return ()
 
       -- Execution times
       timeFst <- liftIO $ fromJust <$> readIORef timeFstRef
@@ -537,3 +585,8 @@ printHypeStats hype = do
   putStr . show $ AStar.waitingNodesNum hype
   putStr ","
   putStr . show $ AStar.waitingEdgesNum hype
+
+
+-- | Round the floiting-point number to the given number of decimal digits.
+roundTo :: Double -> Int -> Double
+roundTo f n = (fromInteger $ round $ f * (10^n)) / (10.0^^n)

@@ -76,6 +76,11 @@ globalCfgOptions = New.GlobalCfg
           <> short 'e'
           <> help "Type of terminals" )
   <*> selectCfgOptions
+  -- <*> (optional . fmap T.pack . strOption)
+  <*> option auto
+        ( long "select-files"
+          <> value []
+          <> help "Select files to perform the experiment" )
 
 
 mapCfgOptions :: Parser Mapping.MapCfg
@@ -381,7 +386,7 @@ run cmd =
       let mweSel = New.compileSelect selCfg
       in  void $ Extract.extractGrammar path begSym mweSel
     Full cfg -> void $ New.runExperiment cfg
-    Full2 cfg -> void $ New.runExperiment cfg
+    Full2 cfg -> void $ New.runExperiment2 cfg
     -- TestParser path begSym -> Extract.testParser path begSym
 
 --          Trees buildData ->
