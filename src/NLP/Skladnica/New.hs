@@ -228,7 +228,7 @@ runExperiment2 GlobalCfg{..} = do
                 if encodes refMweDeriv
                   then return ()
                   else do
-                    let curDerTrees = Deriv.derivTrees hype begSym sentLen
+                    let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
                         curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
                         curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
                         mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
