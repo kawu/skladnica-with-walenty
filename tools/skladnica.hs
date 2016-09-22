@@ -81,6 +81,8 @@ globalCfgOptions = New.GlobalCfg
         ( long "select-files"
           <> value []
           <> help "Select files to perform the experiment" )
+  <*> switch (long "hide-warnings")
+  <*> switch (long "show-trees")
 
 
 mapCfgOptions :: Parser Mapping.MapCfg

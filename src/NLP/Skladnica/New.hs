@@ -12,7 +12,7 @@ module NLP.Skladnica.New
 ) where
 
 
-import           Control.Monad                 (forM_, guard, void)
+import           Control.Monad                 (forM_, guard, void, when)
 import           Control.Monad.IO.Class        (liftIO)
 import           Control.Monad.Morph           as Morph
 import qualified Control.Monad.State.Strict    as E
@@ -66,6 +66,11 @@ data GlobalCfg = GlobalCfg
     -- ^ MWE selection configuration
   , selectFiles     :: [Text]
     -- ^ Perform the experiment on selected Skladnica trees only
+  , hideWarnings    :: Bool
+    -- ^ Hide warnings
+  , showTrees    :: Bool
+    -- ^ Show trees when the lesser hypergraph does not contain
+    -- the reference MWE derivation
   }
   deriving (Show)
 
@@ -184,6 +189,12 @@ runExperiment2 GlobalCfg{..} = do
           -- interest to us here.
           E.guard (AStar.modifType hypeModif == AStar.NewNode)
 
+--           -- Look only at regular, non-gapped items. For the sake of
+--           -- a pseudo-monotonic heuristic.
+--           E.guard $ case AStar.modifItem hypeModif of
+--             AStar.ItemA q -> AStar._gap (AStar._spanA q) == Nothing
+--             AStar.ItemP p -> AStar._gap (AStar._spanP p) == Nothing
+
           cont <- liftIO (readIORef contRef)
           case cont of
 
@@ -225,27 +236,27 @@ runExperiment2 GlobalCfg{..} = do
                 let encodes = Deriv.encodes hype begSym sentLen
                 putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
                 putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-                if encodes refMweDeriv
-                  then return ()
-                  else do
-                    let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
-                        curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
-                        curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
-                        mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
-                        putRose = putStrLn . R.drawTree . fmap show
-                    putStrLn "Reference MWE derivation:"
-                    putRose . Dep.toRose $ mweDepTree
-                    putStrLn "Minimal found derivation:"
-                    putRose . Dep.toRose $ curDepTree
---                     putStrLn "Found derivations:"
---                     forM_ curDerTrees $ \derTree -> do
---                       let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
---                       putRose . Dep.toRose $ depTree
+                when (showTrees && not (encodes refMweDeriv)) $ do
+                  let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
+                      curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
+                      curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
+                      mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
+                      putRose = putStrLn . R.drawTree . fmap show
+                  putStrLn "Reference MWE derivation:"
+                  putRose . Dep.toRose $ mweDepTree
+                  putStrLn "Minimal found derivation:"
+                  putRose . Dep.toRose $ curDepTree
+--                   putStrLn "Found derivations:"
+--                   forM_ curDerTrees $ \derTree -> do
+--                     let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
+--                     putRose . Dep.toRose $ depTree
 
-            Done optimal -> if roundIt (getWeight itemWeight) <= roundIt optimal then do
-              liftIO $ putStrLn "ERROR!!! the weight got at the level of optimal again!!!"
-              liftIO $ putStr "OPTIMAL: " >> print optimal
-              liftIO $ putStr "CURRENT: " >> print (getWeight itemWeight)
+            Done optimal ->
+              if not hideWarnings &&
+                 roundIt (getWeight itemWeight) <= roundIt optimal then do
+                liftIO $ putStrLn "WARNING: the weight got at the level of optimal again!"
+                liftIO $ putStr "OPTIMAL: " >> print optimal
+                liftIO $ putStr "CURRENT: " >> print (getWeight itemWeight)
               else return ()
 
       -- Execution times
