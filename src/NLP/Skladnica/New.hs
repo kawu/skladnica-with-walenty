@@ -173,7 +173,32 @@ runExperiment2 GlobalCfg{..} = do
       -- CPU time at the first item pulled from the pipe
       timeFstRef <- liftIO $ newIORef Nothing
       -- CPU time at the checkpoint
-      timeCheckRef <- liftIO $ newIORef 0
+      timeCheckRef <- liftIO $ newIORef Nothing
+
+      let checkPoint hype optimal = do
+            -- Checkpoint execution time
+            writeIORef timeCheckRef . Just =<< getCPUTime
+            writeIORef contRef (Done optimal)
+            -- Columns: hype stats at checkpoint 1
+            printHypeStats hype
+            -- Column: are ref. derivations encoded in the graph
+            let encodes = Deriv.encodes hype begSym sentLen
+            putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+            putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+            when (showTrees && not (encodes refMweDeriv)) $ do
+              let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
+                  curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
+                  curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
+                  mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
+                  putRose = putStrLn . R.drawTree . fmap show
+              putStrLn "Reference MWE derivation:"
+              putRose . Dep.toRose $ mweDepTree
+              putStrLn "Minimal found derivation:"
+              putRose . Dep.toRose $ curDepTree
+--               putStrLn "Found derivations:"
+--               forM_ curDerTrees $ \derTree -> do
+--                 let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
+--                 putRose . Dep.toRose $ depTree
 
       -- We have to hoist the parsing pipe to `MaybeT`; UPDATE: not anymore
       -- let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
@@ -226,30 +251,31 @@ runExperiment2 GlobalCfg{..} = do
 --                 print (AStar.totalWeight itemWeight)
 
               -- the first time that the optimal weight is surpassed
-              liftIO $ do
-                -- Checkpoint execution time
-                writeIORef timeCheckRef =<< getCPUTime
-                writeIORef contRef (Done optimal)
-                -- Columns: hype stats at checkpoint 1
-                printHypeStats hype
-                -- Column: are ref. derivations encoded in the graph
-                let encodes = Deriv.encodes hype begSym sentLen
-                putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
-                putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-                when (showTrees && not (encodes refMweDeriv)) $ do
-                  let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
-                      curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
-                      curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
-                      mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
-                      putRose = putStrLn . R.drawTree . fmap show
-                  putStrLn "Reference MWE derivation:"
-                  putRose . Dep.toRose $ mweDepTree
-                  putStrLn "Minimal found derivation:"
-                  putRose . Dep.toRose $ curDepTree
---                   putStrLn "Found derivations:"
---                   forM_ curDerTrees $ \derTree -> do
---                     let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
---                     putRose . Dep.toRose $ depTree
+              liftIO $ checkPoint hype optimal
+--               liftIO $ do
+--                 -- Checkpoint execution time
+--                 writeIORef timeCheckRef . Just =<< getCPUTime
+--                 writeIORef contRef (Done optimal)
+--                 -- Columns: hype stats at checkpoint 1
+--                 printHypeStats hype
+--                 -- Column: are ref. derivations encoded in the graph
+--                 let encodes = Deriv.encodes hype begSym sentLen
+--                 putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+--                 putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+--                 when (showTrees && not (encodes refMweDeriv)) $ do
+--                   let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
+--                       curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
+--                       curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
+--                       mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
+--                       putRose = putStrLn . R.drawTree . fmap show
+--                   putStrLn "Reference MWE derivation:"
+--                   putRose . Dep.toRose $ mweDepTree
+--                   putStrLn "Minimal found derivation:"
+--                   putRose . Dep.toRose $ curDepTree
+-- --                   putStrLn "Found derivations:"
+-- --                   forM_ curDerTrees $ \derTree -> do
+-- --                     let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
+-- --                     putRose . Dep.toRose $ depTree
 
             Done optimal ->
               if not hideWarnings &&
@@ -261,8 +287,15 @@ runExperiment2 GlobalCfg{..} = do
 
       -- Execution times
       timeFst <- liftIO $ fromJust <$> readIORef timeFstRef
-      timeCheck <- liftIO $ readIORef timeCheckRef
+      timeCheckMay <- liftIO $ readIORef timeCheckRef
       timeEnd <- liftIO getCPUTime
+
+      timeCheck <- case timeCheckMay of
+        Just t  -> return t
+        Nothing -> do
+          liftIO $ checkPoint hypeFini 0
+          return timeEnd
+
       let timeFstInMs, timeCheckInMs, timeEndInMs :: Double
           timeFstInMs = fromIntegral (timeFst - timeBeg) * 1e-9
           timeCheckInMs = fromIntegral (timeCheck - timeBeg) * 1e-9

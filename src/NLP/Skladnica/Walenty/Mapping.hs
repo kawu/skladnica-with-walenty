@@ -134,21 +134,26 @@ metaArgQ arg =
 -- | A query expression for an argument.
 -- TODO: function ignored.
 argumentQ :: W.Argument -> Q.Expr Edge Q.Tree
-argumentQ arg = Q.orQ . map phraseQ $ W.phraseAlt arg
+argumentQ arg =
+  let f = W.function arg
+  in  Q.orQ . map (phraseQ f) $ W.phraseAlt arg
 
 
-phraseQ :: W.Phrase -> Q.Expr Edge Q.Tree
-phraseQ p = case p of
-  W.Standard s -> stdPhraseQ s
-  W.Special s -> specPhraseQ s
+phraseQ :: Maybe W.Function -> W.Phrase -> Q.Expr Edge Q.Tree
+phraseQ f p = case p of
+  W.Standard s -> stdPhraseQ f s
+  W.Special s -> specPhraseQ f s
 
 
-stdPhraseQ :: W.StdPhrase -> Q.Expr Edge Q.Tree
-stdPhraseQ phrase = case phrase of
+stdPhraseQ
+  :: Maybe W.Function -- ^ Subject, object
+  -> W.StdPhrase
+  -> Q.Expr Edge Q.Tree
+stdPhraseQ mayFun phrase = case phrase of
   W.NP{..} -> Q.andQ
     [ Q.Current $ Q.andQ
       [ hasCat "fno"
-      , caseQ caseG
+      , caseQ mayFun caseG
       , Q.maybeQ agrNumber agreeNumQ ]
     , Q.andQ
       [ lexicalQ lexicalHead
@@ -159,7 +164,7 @@ stdPhraseQ phrase = case phrase of
       [ hasCat "fpm"
       , hasAttr przyimek $ preposition
       , hasAttr klasa "rzecz"
-      , caseQ caseG ]
+      , caseQ mayFun caseG ]
     -- we "skip" the child so that potential agreement works
     -- between the parent of PP and the NP (not sure if this
     -- is necessary)
@@ -193,9 +198,9 @@ stdPhraseQ phrase = case phrase of
 --     ]
 
 
-specPhraseQ :: W.SpecPhrase -> Q.Expr Edge Q.Tree
-specPhraseQ p = case p of
-  W.XP{..} -> Q.maybeQ xpVal phraseQ
+specPhraseQ :: Maybe W.Function -> W.SpecPhrase -> Q.Expr Edge Q.Tree
+specPhraseQ f p = case p of
+  W.XP{..} -> Q.maybeQ xpVal (phraseQ f)
   -- TODO: not handled yet
   W.Fixed{} -> Q.B False
   _ -> Q.B True
@@ -232,29 +237,50 @@ dependentsQ deps = case deps of
 
 
 -- | Skladnica case value based on the Walenty case value.
-caseQ :: W.Case -> Q.Expr Edge Q.Node
-caseQ c =
-  pr $ case c of
-    W.Nominative -> sg "mian"
-    W.Genitive -> sg "dop"
-    W.Dative -> sg "cel"
-    W.Accusative -> sg "bier"
-    W.Instrumental -> sg "narz"
-    W.Locative -> sg "miej"
-    W.Partitive -> ["dop", "bier"]
-    -- TODO: structural case should depend on the function, can be
-    -- precomputed at the compilation stage.
-    W.Structural -> ["mian", "dop", "bier"]
-    -- TODO: not sure if can be resolved at the compilation stage
-    W.Agreement -> []
-    W.PostPrep -> sg "pop"
-    -- TODO: not handled by Agata's specification
-    W.Predicative -> []
+caseQ
+  :: Maybe W.Function -- ^ Subject, object
+  -> W.Case
+  -> Q.Expr Edge Q.Node
+caseQ mayFun c =
+  case c of
+    W.Structural -> case mayFun of
+      Just W.Subject -> pr ["mian", "dop"]
+      Just W.Object -> Q.ifThenElse
+        (hasAttr "neg" "nie")
+        (pr ["dop"])
+        (pr ["bier", "dop"])
+      Nothing -> pr ["mian", "dop", "bier"]
+--     W.Structural ->
+--       Q.ifThenElse
+--         (hasAttr "neg" "nie")
+--         (pr ["dop"]) $
+--         case mayFun of
+--           Nothing -> pr ["mian", "bier"]
+--           Just W.Subject -> pr ["mian"]
+--           Just W.Object -> pr ["bier"]
+    _ -> pr $ case c of
+      W.Nominative -> sg "mian"
+      W.Genitive -> sg "dop"
+      W.Dative -> sg "cel"
+      W.Accusative -> sg "bier"
+      W.Instrumental -> sg "narz"
+      W.Locative -> sg "miej"
+      W.Partitive -> ["dop", "bier"]
+      -- TODO: not sure if can be resolved at the compilation stage
+      W.Agreement -> []
+      W.PostPrep -> sg "pop"
+      -- TODO: not handled by Agata's specification
+      W.Predicative -> []
+--       -- TODO: structural case should depend on the function, can be
+--       -- precomputed at the compilation stage.
+--       W.Structural -> ["mian", "dop", "bier"]
+      W.Structural -> error "caseQ: impossible happened"
     where
       sg x = [x]
       pr xs = if null xs
         then Q.B True
         else Q.orQ $ map (hasAttr przypadek) xs
+      -- isNeg = Q.Current . hasAttr "neg" "nie"
 
 
 agreeNumQ :: W.Agree W.Number -> Q.Expr Edge Q.Node
