@@ -39,7 +39,7 @@ data Command
       -- ^ Mark MWEs as heads
     | Extract FilePath String New.SelectCfg
       -- ^ Extract grammar from the input XML files
-    | Full New.GlobalCfg
+    -- | Full New.GlobalCfg
       -- ^ Perform the full experiment
     | Full2 New.GlobalCfg
       -- ^ Perform the full experiment
@@ -59,7 +59,8 @@ globalCfgOptions :: Parser New.GlobalCfg
 globalCfgOptions = New.GlobalCfg
   <$> treebankParser
   <*> switch (long "restrict-grammar" <> short 'r')
-  <*> switch (long "use-freqs" <> short 'f')
+  <*> switch (long "use-term-freq")
+  <*> switch (long "use-tree-freq")
   <*> fmap T.pack (strOption
         ( long "start"
           <> short 's'
@@ -83,6 +84,7 @@ globalCfgOptions = New.GlobalCfg
           <> help "Select files to perform the experiment" )
   <*> switch (long "hide-warnings")
   <*> switch (long "show-trees")
+  <*> switch (long "stop-on-first")
 
 
 mapCfgOptions :: Parser Mapping.MapCfg
@@ -319,10 +321,10 @@ opts = subparser
             (info (helper <*> extractOptions)
                 (progDesc "Extract the grammar from the input XML file")
                 )
-        <> command "full"
-            (info (helper <*> (Full <$> globalCfgOptions))
-                (progDesc "Perform the full experiment")
-                )
+--         <> command "full"
+--             (info (helper <*> (Full <$> globalCfgOptions))
+--                 (progDesc "Perform the full experiment")
+--                 )
         <> command "full2"
             (info (helper <*> (Full2 <$> globalCfgOptions))
                 (progDesc "Perform the full experiment")
@@ -387,7 +389,7 @@ run cmd =
     Extract path begSym selCfg ->
       let mweSel = New.compileSelect selCfg
       in  void $ Extract.extractGrammar path begSym mweSel
-    Full cfg -> void $ New.runExperiment cfg
+    -- Full cfg -> void $ New.runExperiment cfg    --> used Full2
     Full2 cfg -> void $ New.runExperiment2 cfg
     -- TestParser path begSym -> Extract.testParser path begSym
 

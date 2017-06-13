@@ -30,6 +30,9 @@ module NLP.Skladnica.Extract
 , TermType (..)
 , wordForms
 
+-- * Frequencies extraction
+, relativeETFreq
+
 -- * Utils
 , buildGram
 , buildFreqGram
@@ -70,6 +73,7 @@ import qualified NLP.Walenty                   as W
 import qualified NLP.Skladnica.Walenty.Grammar as G
 import qualified NLP.Skladnica.Walenty.MweTree as MWE
 import qualified NLP.Skladnica.Walenty.Search  as Search
+import qualified NLP.Skladnica.Walenty.Select  as Select
 
 
 ------------------------------------------------------------------------------
@@ -93,14 +97,14 @@ type DerTree = Deriv.Deriv T.Text Tok
 type DepTree = Dep.Tree (S.Set Tok) ()
 
 
--- | Return the size (i.e., the number of ndoes)of the derivation tree.
+-- | Return the size (i.e., the number of nodes) of the derivation tree.
 derivSize :: DerTree -> Int
 derivSize = Gorn.size . Gorn.fromDeriv
 
 
 -- | Extracted grammar.
 data Extract = Extract
-  { gramSet :: G.TAG
+  { gramSet :: S.Set G.ET
   , freqMap :: M.Map T.Text Int
   } deriving (Show, Eq, Ord)
 
@@ -137,12 +141,12 @@ fromFile termTyp mwePred skladnicaXML = do
 
 -- | Parse the given sentence with the given grammar.
 parse
-  :: [T.Text] -- ^ Input sentence
-  -> T.Text   -- ^ Start symbol
-  -> G.TAG    -- ^ Grammar
+  :: [T.Text]    -- ^ Input sentence
+  -> T.Text      -- ^ Start symbol
+  -> S.Set G.ET  -- ^ Grammar
   -> IO [DerTree]
 parse sent begSym tag = do
-  let gram = buildGram tag
+  let gram = buildGram . M.fromList . map (,1) . S.toList $ tag
       termMemo = Memo.wrap read show $ Memo.list Memo.char
       auto = AStar.mkAuto termMemo gram
       sentLen = length sent
@@ -189,7 +193,7 @@ miniDerivOf derivList sklTree =
 
 
 -- -- | Extract TAG corresponding to the given Składnica tree.
--- localTAG :: MWE.MweTree -> G.TAG
+-- localTAG :: MWE.MweTree -> S.Set G.ET
 -- localTAG sklTree0 =
 --   let mweTree = fmap MWE.sklNode (MWE.emboss sklTree0)
 --       sklTree = fmap MWE.sklNode sklTree0
@@ -227,6 +231,7 @@ findDeriv maxNum begSym termTyp sklTree = do
   let ets = G.extractGrammar sklTree
   derivList <- take maxNum <$> parse (wordForms termTyp sklTree) begSym ets
   return $ miniDerivOf derivList sklTree
+
 
 -- | Extract local grammars from the individual sentences in the input forest,
 -- parse with the local grammars and show the corresponding derivation and
@@ -286,6 +291,66 @@ extractGrammar skladnicaXML begSym0 mwePred = do
             putRose . Deriv.deriv4show $ derivTree
             putRose . Dep.toRose $ depTree
             -- putRose . Dep.toRose . canonize . Dep.mapDep (const ()) $ depTree
+
+
+------------------------------------------------------------------------------
+-- Computing relative ET frequencies
+--------------------------------------------------------------------------------
+
+
+-- | Extracted frequencies.
+data Freq = Freq
+  { potentialOcc :: M.Map G.ET Int
+  , actualOcc :: M.Map G.ET Int
+  } deriving (Show, Eq, Ord)
+
+
+emptyFreq :: Freq
+emptyFreq = Freq M.empty M.empty
+
+
+-- | Compute relative frequencies of the individual ETs.
+relativeETFreq
+  :: TermType
+    -- ^ As in `fromFile`
+  -> (MWE.MweInfo -> Bool)
+    -- ^ Select MWEs based on auxiliary information (e.g. source type);
+    -- should be the same predicated as in `fromFile` (grammar extraction)
+  -> FilePath
+    -- ^ Skladnica XML
+  -> S.Set G.ET
+    -- ^ The already extracted grammar
+  -> IO (M.Map G.ET Double)
+relativeETFreq termTyp mwePred skladnicaXML tag = do
+  trees <- MWE.readTop skladnicaXML
+  Freq{..} <- flip E.execStateT emptyFreq $ do
+    forM_ trees $ \sklTree0 -> do
+      let sklTree = fmap MWE.sklNode $ MWE.topRoot sklTree0
+          -- TODO: do we need `sklTree` to get `sent`? Maybe `mweTree` is fine?
+          sent = wordForms termTyp sklTree
+          mweTree = MWE.modifyRoot (fmap MWE.sklNode . MWE.emboss mwePred) sklTree0
+          actualETs = G.extractGrammar $ MWE.topRoot mweTree
+          potentialETs = Select.select (S.fromList sent) tag
+      when (S.null actualETs || S.null potentialETs) $ do
+        liftIO $ putStrLn "[relativeETFreq] WARNING: something went wrong..."
+      E.modify' $ \st ->
+        let newOcc occ ets = M.unionWith (+) occ
+                             (M.fromList [(et, 1) | et <- S.toList ets])
+            newPotOcc = newOcc (potentialOcc st) potentialETs
+            newActOcc = newOcc (actualOcc st) actualETs
+        -- below we fully evaluate `actualETs` so that any references to the XML
+        -- file read from the disk are released (that's my analysis, at least;
+        -- in any case, this trick is necessary)
+        in  (length . show $ actualETs) `seq` st
+            { potentialOcc = newPotOcc
+            , actualOcc = newActOcc }
+  return $ M.fromList
+    [ ( et
+      , fromIntegral (maybe 0 id $ M.lookup et actualOcc) /
+        fromIntegral (potentialOcc M.! et) )
+    | et <- S.toList $
+            M.keysSet potentialOcc `S.union`
+            M.keysSet actualOcc ]
 
 
 ------------------------------------------------------------------------------
@@ -466,16 +531,18 @@ _orthForms = map Skl.orth . Search.terminals
 
 
 -- | Build a grammar from the given set of ETs.
-buildGram :: S.Set G.ET -> DAG.Gram T.Text T.Text
-buildGram = DAG.mkGram . map (,1) . S.toList
+buildGram :: M.Map G.ET Double -> DAG.Gram T.Text T.Text
+buildGram = DAG.mkGram . M.toList
+-- buildGram :: S.Set G.ET -> DAG.Gram T.Text T.Text
+-- buildGram = DAG.mkGram . map (,1) . S.toList
 
 
 -- | Build a grammar from the given set of ETs.
 buildFreqGram
   :: M.Map T.Text Int     -- ^ Frequency map
-  -> S.Set G.ET
+  -> M.Map G.ET Double
   -> DAG.Gram T.Text T.Text
-buildFreqGram fm = DAG.mkFreqGram fm . map (,1) . S.toList
+buildFreqGram fm = DAG.mkFreqGram fm . M.toList
 
 
 -- | Extract frequency map from a tree.

@@ -1,13 +1,14 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TupleSections             #-}
 
 
 module NLP.Skladnica.New
 ( GlobalCfg (..)
 , SelectCfg (..)
 , compileSelect
-, runExperiment
+-- , runExperiment
 , runExperiment2
 ) where
 
@@ -53,12 +54,14 @@ data GlobalCfg = GlobalCfg
   , restrictGrammar :: Bool
     -- ^ Restrict (supertag) the grammar to match
     -- the individual sentences?
-  , useFreqs        :: Bool
-    -- ^ Use frequencies to customize the heuristic?
+  , useTermFreq        :: Bool
+    -- ^ Use terminal frequencies to customize the heuristic?
+  , useETFreq        :: Bool
+    -- ^ Use ET frequencies to customize the weights?
   , begSym          :: Text
     -- ^ Start symbol
   , maxDerivNum     :: Int
-    -- ^ Maximum number of derivation to generate to find the
+    -- ^ Maximum number of derivations to generate to find the
     -- derivation corresponding to the given Składnica tree
   , termTyp         :: Ext.TermType
     -- ^ What type of terminals use in the experiments
@@ -69,8 +72,11 @@ data GlobalCfg = GlobalCfg
   , hideWarnings    :: Bool
     -- ^ Hide warnings
   , showTrees    :: Bool
-    -- ^ Show trees when the lesser hypergraph does not contain
-    -- the reference MWE derivation
+    -- ^ Show trees when the lesser hypergraph does not contain the reference
+    -- MWE derivation
+  , stopOnFirst  :: Bool
+    -- ^ Stop the inference process immediately once the most probably
+    -- derivation has been found.
   }
   deriving (Show)
 
@@ -88,7 +94,7 @@ data Result a
 runExperiment2 :: GlobalCfg -> IO ()
 runExperiment2 GlobalCfg{..} = do
 
-  -- Ronding function
+  -- Rounding function
   let roundIt x = x `roundTo` 10
 
   -- MWE selection predicate
@@ -101,13 +107,28 @@ runExperiment2 GlobalCfg{..} = do
   forM_ (S.toList $ Ext.gramSet extract) $
     putStrLn . R.drawTree . fmap show
 
+  putStrLn "\n===== GRAMMAR RELATIVE FREQUENCIES =====\n"
+  relativeFreq <- Ext.relativeETFreq termTyp mweSelect skladnicaXML
+    (Ext.gramSet extract)
+
+  putStrLn "\n===== EXTRACTED RELATIVE FREQUENCIES =====\n"
+  forM_ (M.toList relativeFreq) $ \(tree, freq) -> do
+    putStr . R.drawTree . fmap show $ tree
+    putStrLn $ "=> " ++ show freq
+    putStrLn ""
+
   -- grammar-building function
-  let buildGram = if useFreqs
+  let buildGram = if useTermFreq
                   then Ext.buildFreqGram (Ext.freqMap extract)
                   else Ext.buildGram
 
+  -- weighted grammar
+  let freqGram = if useETFreq
+                 then M.fromList . map (\(et, freq) -> (et, 1 - freq)) $ M.toList relativeFreq
+                 else M.fromList . map (,1) . S.toList $ Ext.gramSet extract
+
   -- single global grammar for all
-  let globGram = buildGram (Ext.gramSet extract)
+  let globGram = buildGram freqGram
 
   putStrLn "\n===== PARSING TESTS =====\n"
   skladnica <- MWE.readTop skladnicaXML
@@ -161,8 +182,8 @@ runExperiment2 GlobalCfg{..} = do
       liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
       liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
 
-      -- Build the local grammar (simple form of super-tagging)
-      let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
+      -- Build the local grammar (simple form of supertagging)
+      let localETs = Select.select' (S.fromList sent) freqGram -- (Ext.gramSet extract)
           localGram = if restrictGrammar then buildGram localETs else globGram
 
       -- Used to control the state of the parsing process
@@ -175,6 +196,8 @@ runExperiment2 GlobalCfg{..} = do
       -- CPU time at the checkpoint
       timeCheckRef <- liftIO $ newIORef Nothing
 
+      -- Store stats when the checkpoint is reached (i.e., when the optimal
+      -- weight is exceeded)
       let checkPoint hype optimal = do
             -- Checkpoint execution time
             writeIORef timeCheckRef . Just =<< getCPUTime
@@ -229,7 +252,10 @@ runExperiment2 GlobalCfg{..} = do
                 Just _ -> return ()
               AStar.ItemP p <- return item
               E.guard (final p)
-              liftIO . writeIORef contRef . Some $ getWeight itemWeight
+              let optimal = getWeight itemWeight
+              liftIO $ if stopOnFirst
+                then checkPoint hype optimal
+                else writeIORef contRef (Some optimal)
 --               liftIO $ do
 --                 putStrLn "Optimal info:"
 --                 AStar.printItem item hype
@@ -252,33 +278,9 @@ runExperiment2 GlobalCfg{..} = do
 
               -- the first time that the optimal weight is surpassed
               liftIO $ checkPoint hype optimal
---               liftIO $ do
---                 -- Checkpoint execution time
---                 writeIORef timeCheckRef . Just =<< getCPUTime
---                 writeIORef contRef (Done optimal)
---                 -- Columns: hype stats at checkpoint 1
---                 printHypeStats hype
---                 -- Column: are ref. derivations encoded in the graph
---                 let encodes = Deriv.encodes hype begSym sentLen
---                 putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
---                 putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
---                 when (showTrees && not (encodes refMweDeriv)) $ do
---                   let curDerTrees = take maxDerivNum $ Deriv.derivTrees hype begSym sentLen
---                       curDerTree = minimumBy (comparing Ext.derivSize) curDerTrees
---                       curDepTree = Dep.fromDeriv . Gorn.fromDeriv $ curDerTree
---                       mweDepTree = Dep.fromDeriv . Gorn.fromDeriv $ refMweDeriv
---                       putRose = putStrLn . R.drawTree . fmap show
---                   putStrLn "Reference MWE derivation:"
---                   putRose . Dep.toRose $ mweDepTree
---                   putStrLn "Minimal found derivation:"
---                   putRose . Dep.toRose $ curDepTree
--- --                   putStrLn "Found derivations:"
--- --                   forM_ curDerTrees $ \derTree -> do
--- --                     let depTree = Dep.fromDeriv . Gorn.fromDeriv $ derTree
--- --                     putRose . Dep.toRose $ depTree
 
             Done optimal ->
-              if not hideWarnings &&
+              if not hideWarnings && not stopOnFirst &&
                  roundIt (getWeight itemWeight) <= roundIt optimal then do
                 liftIO $ putStrLn "WARNING: the weight got at the level of optimal again!"
                 liftIO $ putStr "OPTIMAL: " >> print optimal
@@ -314,142 +316,142 @@ runExperiment2 GlobalCfg{..} = do
         putStrLn ""
 
 
--- | Run our full experiment.
-runExperiment :: GlobalCfg -> IO ()
-runExperiment GlobalCfg{..} = do
-
-  -- MWE selection predicate
-  let mweSelect = compileSelect selectCfg
-
-  putStrLn "\n===== GRAMMAR EXTRACTION =====\n"
-  extract <- Ext.fromFile termTyp mweSelect skladnicaXML
-
-  putStrLn "\n===== EXTRACTED GRAMMAR =====\n"
-  forM_ (S.toList $ Ext.gramSet extract) $
-    putStrLn . R.drawTree . fmap show
-
-  -- grammar-building function
-  let buildGram = if useFreqs
-                  then Ext.buildFreqGram (Ext.freqMap extract)
-                  else Ext.buildGram
-
-  -- single global grammar for all
-  let globGram = buildGram (Ext.gramSet extract)
-
-  putStrLn "\n===== PARSING TESTS =====\n"
-  skladnica <- MWE.readTop skladnicaXML
-
-  putStr "file-name,sent-length,reg-deriv-size,mwe-deriv-size,"
-  putStr "chart-nodes-1,chart-arcs-1,agenda-nodes-1,agenda-arcs-1,"
-  putStr "encodes-reg-1,encodes-mwe-1,"
-  putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2,"
-  putStr "encodes-reg-2,encodes-mwe-2,time-fst,time-1,time-2"
-  putStrLn ""
-
-  -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
-  forM_ skladnica $ \sklTree0 -> runMaybeT $ do
-
-    -- First we construct two versions of the syntactic tree: one compositional,
-    -- one which assumes MWE interpretations.
-    let sklTree = fmap MWE.sklNode $ MWE.topRoot sklTree0
-        mweTree = fmap MWE.sklNode . MWE.emboss mweSelect $ MWE.topRoot sklTree0
-
-    -- Stop if the two versions are identical.
-    guard $ mweTree /= sklTree
-
-    -- Some utility "variables"
-    let sent = Ext.wordForms termTyp sklTree
-        sentLen = length sent
-        final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
-               && AStar._dagID p == Left begSym
-        -- getWeight e = AStar.priWeight e + AStar.estWeight e
-        getWeight = AStar.totalWeight
-
-    -- Find the reference derivation trees corresponding to the syntactic trees
-    refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
-    refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
-
-    -- Don't need any more MaybeT capabilities
-    lift $ do
-
-      -- Column: file name (if in meta-attributes)
-      let fileName = T.map escComma . maybe "_" id . M.lookup "file"
-          escComma c = case c of ',' -> '.' ; _ -> c
-      liftIO $ T.putStr (fileName $ MWE.topAtts sklTree0)
-
-      -- Column: sentence length
-      liftIO $ putStr "," >> putStr (show sentLen)
-
-      -- Columns: reg-deriv-size and mwe-deriv-size
-      liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
-      liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
-
-      -- Build the local grammar (simple form of super-tagging)
-      let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
-          localGram = if restrictGrammar then buildGram localETs else globGram
-
-      -- Used to control the state of the parsing process
-      contRef <- liftIO $ newIORef None
-
-      -- Start measuring the execution time
-      timeBeg <- liftIO getCPUTime
-      -- CPU time at the first item pulled from the pipe
-      timeFstRef <- liftIO $ newIORef Nothing
-      -- CPU time at the checkpoint
-      timeCheckRef <- liftIO $ newIORef 0
-
-      -- We have to hoist the parsing pipe to `MaybeT`; UPDATE: not anymore
-      -- let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
-      let pipe = Ext.parsePipe sent begSym localGram
-      hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
-        let item = AStar.modifItem hypeModif
-            itemWeight = AStar.modifTrav hypeModif
-            hype = AStar.modifHype hypeModif
-        void . runMaybeT $ do
-          cont <- liftIO (readIORef contRef)
-          case cont of
-            None -> do
-              liftIO $ readIORef timeFstRef >>= \case
-                Nothing -> writeIORef timeFstRef . Just =<< getCPUTime
-                Just _ -> return ()
-              AStar.ItemP p <- return item
-              E.guard (final p)
-              liftIO . writeIORef contRef . Some $ getWeight itemWeight
-            Some optimal -> do
-              guard $ getWeight itemWeight > optimal
-              -- the first time that the optimal weight is surpassed
-              liftIO $ do
-                -- Checkpoint execution time
-                writeIORef timeCheckRef =<< getCPUTime
-                writeIORef contRef (Done optimal)
-                -- Columns: hype stats at checkpoint 1
-                printHypeStats hype
-                -- Column: are ref. derivations encoded in the graph
-                let encodes = Deriv.encodes hype begSym sentLen
-                putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
-                putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-            Done _ -> return ()
-
-      -- Execution times
-      timeFst <- liftIO $ fromJust <$> readIORef timeFstRef
-      timeCheck <- liftIO $ readIORef timeCheckRef
-      timeEnd <- liftIO getCPUTime
-      let timeFstInMs, timeCheckInMs, timeEndInMs :: Double
-          timeFstInMs = fromIntegral (timeFst - timeBeg) * 1e-9
-          timeCheckInMs = fromIntegral (timeCheck - timeBeg) * 1e-9
-          timeEndInMs = fromIntegral (timeEnd - timeBeg) * 1e-9
-
-      -- Columns: hype stats at the end, are ref. derivations encoded in
-      -- the graph, and time execution measurments;
-      liftIO $ do
-        printHypeStats hypeFini
-        let encodes = Deriv.encodes hypeFini begSym sentLen
-        putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
-        putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
-        putStr $ "," ++ show timeFstInMs
-        putStr $ "," ++ show timeCheckInMs
-        putStr $ "," ++ show timeEndInMs
-        putStrLn ""
+-- -- | Run our full experiment.
+-- runExperiment :: GlobalCfg -> IO ()
+-- runExperiment GlobalCfg{..} = do
+--
+--   -- MWE selection predicate
+--   let mweSelect = compileSelect selectCfg
+--
+--   putStrLn "\n===== GRAMMAR EXTRACTION =====\n"
+--   extract <- Ext.fromFile termTyp mweSelect skladnicaXML
+--
+--   putStrLn "\n===== EXTRACTED GRAMMAR =====\n"
+--   forM_ (S.toList $ Ext.gramSet extract) $
+--     putStrLn . R.drawTree . fmap show
+--
+--   -- grammar-building function
+--   let buildGram = if useTermFreq
+--                   then Ext.buildFreqGram (Ext.freqMap extract)
+--                   else Ext.buildGram
+--
+--   -- single global grammar for all
+--   let globGram = buildGram (Ext.gramSet extract)
+--
+--   putStrLn "\n===== PARSING TESTS =====\n"
+--   skladnica <- MWE.readTop skladnicaXML
+--
+--   putStr "file-name,sent-length,reg-deriv-size,mwe-deriv-size,"
+--   putStr "chart-nodes-1,chart-arcs-1,agenda-nodes-1,agenda-arcs-1,"
+--   putStr "encodes-reg-1,encodes-mwe-1,"
+--   putStr "chart-nodes-2,chart-arcs-2,agenda-nodes-2,agenda-arcs-2,"
+--   putStr "encodes-reg-2,encodes-mwe-2,time-fst,time-1,time-2"
+--   putStrLn ""
+--
+--   -- flip E.execStateT () $ forM_ skladnica $ \sklTree0 -> do
+--   forM_ skladnica $ \sklTree0 -> runMaybeT $ do
+--
+--     -- First we construct two versions of the syntactic tree: one compositional,
+--     -- one which assumes MWE interpretations.
+--     let sklTree = fmap MWE.sklNode $ MWE.topRoot sklTree0
+--         mweTree = fmap MWE.sklNode . MWE.emboss mweSelect $ MWE.topRoot sklTree0
+--
+--     -- Stop if the two versions are identical.
+--     guard $ mweTree /= sklTree
+--
+--     -- Some utility "variables"
+--     let sent = Ext.wordForms termTyp sklTree
+--         sentLen = length sent
+--         final p = AStar._spanP p == AStar.Span 0 sentLen Nothing
+--                && AStar._dagID p == Left begSym
+--         -- getWeight e = AStar.priWeight e + AStar.estWeight e
+--         getWeight = AStar.totalWeight
+--
+--     -- Find the reference derivation trees corresponding to the syntactic trees
+--     refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
+--     refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
+--
+--     -- Don't need any more MaybeT capabilities
+--     lift $ do
+--
+--       -- Column: file name (if in meta-attributes)
+--       let fileName = T.map escComma . maybe "_" id . M.lookup "file"
+--           escComma c = case c of ',' -> '.' ; _ -> c
+--       liftIO $ T.putStr (fileName $ MWE.topAtts sklTree0)
+--
+--       -- Column: sentence length
+--       liftIO $ putStr "," >> putStr (show sentLen)
+--
+--       -- Columns: reg-deriv-size and mwe-deriv-size
+--       liftIO $ putStr "," >> putStr (show $ Ext.derivSize refRegDeriv)
+--       liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
+--
+--       -- Build the local grammar (simple form of super-tagging)
+--       let localETs = Select.select (S.fromList sent) (Ext.gramSet extract)
+--           localGram = if restrictGrammar then buildGram localETs else globGram
+--
+--       -- Used to control the state of the parsing process
+--       contRef <- liftIO $ newIORef None
+--
+--       -- Start measuring the execution time
+--       timeBeg <- liftIO getCPUTime
+--       -- CPU time at the first item pulled from the pipe
+--       timeFstRef <- liftIO $ newIORef Nothing
+--       -- CPU time at the checkpoint
+--       timeCheckRef <- liftIO $ newIORef 0
+--
+--       -- We have to hoist the parsing pipe to `MaybeT`; UPDATE: not anymore
+--       -- let pipe = Morph.hoist E.lift $ Ext.parsePipe sent begSym localGram
+--       let pipe = Ext.parsePipe sent begSym localGram
+--       hypeFini <- runEffect . for pipe $ \(hypeModif, _derivTrees) -> do
+--         let item = AStar.modifItem hypeModif
+--             itemWeight = AStar.modifTrav hypeModif
+--             hype = AStar.modifHype hypeModif
+--         void . runMaybeT $ do
+--           cont <- liftIO (readIORef contRef)
+--           case cont of
+--             None -> do
+--               liftIO $ readIORef timeFstRef >>= \case
+--                 Nothing -> writeIORef timeFstRef . Just =<< getCPUTime
+--                 Just _ -> return ()
+--               AStar.ItemP p <- return item
+--               E.guard (final p)
+--               liftIO . writeIORef contRef . Some $ getWeight itemWeight
+--             Some optimal -> do
+--               guard $ getWeight itemWeight > optimal
+--               -- the first time that the optimal weight is surpassed
+--               liftIO $ do
+--                 -- Checkpoint execution time
+--                 writeIORef timeCheckRef =<< getCPUTime
+--                 writeIORef contRef (Done optimal)
+--                 -- Columns: hype stats at checkpoint 1
+--                 printHypeStats hype
+--                 -- Column: are ref. derivations encoded in the graph
+--                 let encodes = Deriv.encodes hype begSym sentLen
+--                 putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+--                 putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+--             Done _ -> return ()
+--
+--       -- Execution times
+--       timeFst <- liftIO $ fromJust <$> readIORef timeFstRef
+--       timeCheck <- liftIO $ readIORef timeCheckRef
+--       timeEnd <- liftIO getCPUTime
+--       let timeFstInMs, timeCheckInMs, timeEndInMs :: Double
+--           timeFstInMs = fromIntegral (timeFst - timeBeg) * 1e-9
+--           timeCheckInMs = fromIntegral (timeCheck - timeBeg) * 1e-9
+--           timeEndInMs = fromIntegral (timeEnd - timeBeg) * 1e-9
+--
+--       -- Columns: hype stats at the end, are ref. derivations encoded in
+--       -- the graph, and time execution measurments;
+--       liftIO $ do
+--         printHypeStats hypeFini
+--         let encodes = Deriv.encodes hypeFini begSym sentLen
+--         putStr $ "," ++ if encodes refRegDeriv then "1" else "0"
+--         putStr $ "," ++ if encodes refMweDeriv then "1" else "0"
+--         putStr $ "," ++ show timeFstInMs
+--         putStr $ "," ++ show timeCheckInMs
+--         putStr $ "," ++ show timeEndInMs
+--         putStrLn ""
 
 
 -- -- | Run our full experiment.
@@ -464,7 +466,7 @@ runExperiment GlobalCfg{..} = do
 --     putStrLn . R.drawTree . fmap show
 --
 --   -- grammar-building function
---   let buildGram = if useFreqs
+--   let buildGram = if useTermFreq
 --                   then Ext.buildFreqGram (Ext.freqMap extract)
 --                   else Ext.buildGram
 --
