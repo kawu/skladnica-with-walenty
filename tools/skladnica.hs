@@ -59,7 +59,10 @@ globalCfgOptions :: Parser New.GlobalCfg
 globalCfgOptions = New.GlobalCfg
   <$> treebankParser
   <*> switch (long "restrict-grammar" <> short 'r')
-  <*> switch (long "use-term-freq")
+  -- <*> switch (long "use-term-freq")
+  <*> option auto
+        ( long "grammar-type"
+          <> value New.SubtreeSharing )
   <*> switch (long "use-tree-freq")
   <*> fmap T.pack (strOption
         ( long "start"
@@ -85,6 +88,12 @@ globalCfgOptions = New.GlobalCfg
   <*> switch (long "hide-warnings")
   <*> switch (long "show-trees")
   <*> switch (long "stop-on-first")
+  <*> option (Just <$> auto)
+        ( long "max-length"
+          <> value Nothing
+          <> help (concat
+                    [ "Maximum sentence length (the grammar is extracted)"
+                    , " from all sentences nonetheless)" ] ) )
 
 
 mapCfgOptions :: Parser Mapping.MapCfg

@@ -34,8 +34,8 @@ module NLP.Skladnica.Extract
 , relativeETFreq
 
 -- * Utils
-, buildGram
-, buildFreqGram
+-- , buildGram
+-- , buildFreqGram
 ) where
 
 
@@ -146,7 +146,7 @@ parse
   -> S.Set G.ET  -- ^ Grammar
   -> IO [DerTree]
 parse sent begSym tag = do
-  let gram = buildGram . M.fromList . map (,1) . S.toList $ tag
+  let gram = DAG.mkGram . map (,1) . S.toList $ tag
       termMemo = Memo.wrap read show $ Memo.list Memo.char
       auto = AStar.mkAuto termMemo gram
       sentLen = length sent
@@ -530,19 +530,19 @@ _orthForms = map Skl.orth . Search.terminals
 --------------------------------------------------------------------------------
 
 
--- | Build a grammar from the given set of ETs.
-buildGram :: M.Map G.ET Double -> DAG.Gram T.Text T.Text
-buildGram = DAG.mkGram . M.toList
--- buildGram :: S.Set G.ET -> DAG.Gram T.Text T.Text
--- buildGram = DAG.mkGram . map (,1) . S.toList
+-- -- | Build a grammar from the given set of ETs.
+-- buildGram :: M.Map G.ET Double -> DAG.Gram T.Text T.Text
+-- buildGram = DAG.mkGram . M.toList
+-- -- buildGram :: S.Set G.ET -> DAG.Gram T.Text T.Text
+-- -- buildGram = DAG.mkGram . map (,1) . S.toList
 
 
--- | Build a grammar from the given set of ETs.
-buildFreqGram
-  :: M.Map T.Text Int     -- ^ Frequency map
-  -> M.Map G.ET Double
-  -> DAG.Gram T.Text T.Text
-buildFreqGram fm = DAG.mkFreqGram fm . M.toList
+-- -- | Build a grammar from the given set of ETs.
+-- buildFreqGram
+--   :: M.Map T.Text Int     -- ^ Frequency map
+--   -> M.Map G.ET Double
+--   -> DAG.Gram T.Text T.Text
+-- buildFreqGram fm = DAG.mkFreqGram fm . M.toList
 
 
 -- | Extract frequency map from a tree.

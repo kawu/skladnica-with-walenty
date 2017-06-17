@@ -6,6 +6,7 @@
 
 module NLP.Skladnica.New
 ( GlobalCfg (..)
+, GramType (..)
 , SelectCfg (..)
 , compileSelect
 -- , runExperiment
@@ -36,6 +37,7 @@ import           System.CPUTime
 
 import qualified NLP.Partage.AStar             as AStar
 import qualified NLP.Partage.AStar.Deriv       as Deriv
+import qualified NLP.Partage.DAG               as DAG
 
 import qualified NLP.Skladnica.Extract         as Ext
 import qualified NLP.Skladnica.Walenty.Grammar as G
@@ -54,9 +56,11 @@ data GlobalCfg = GlobalCfg
   , restrictGrammar :: Bool
     -- ^ Restrict (supertag) the grammar to match
     -- the individual sentences?
-  , useTermFreq        :: Bool
-    -- ^ Use terminal frequencies to customize the heuristic?
-  , useETFreq        :: Bool
+  -- , useTermFreq     :: Bool
+  --   -- ^ Use terminal frequencies to customize the heuristic?
+  , gramType        :: GramType
+      -- ^ Type of grammar (subtree sharing, terminal frequencies)
+  , useETFreq       :: Bool
     -- ^ Use ET frequencies to customize the weights?
   , begSym          :: Text
     -- ^ Start symbol
@@ -77,8 +81,18 @@ data GlobalCfg = GlobalCfg
   , stopOnFirst  :: Bool
     -- ^ Stop the inference process immediately once the most probably
     -- derivation has been found.
+  , maxLength :: Maybe Int
+    -- ^ Parse only these sentences whose length does not exceed this parameter
   }
   deriving (Show)
+
+
+-- | Grammar type selector.
+data GramType
+  = SubtreeSharing
+  | NoSubtreeSharing
+  | TermFrequencies
+  deriving (Show, Read, Eq, Ord)
 
 
 -- | A custom datatype which facilitates computing the size
@@ -118,17 +132,22 @@ runExperiment2 GlobalCfg{..} = do
     putStrLn ""
 
   -- grammar-building function
-  let buildGram = if useTermFreq
-                  then Ext.buildFreqGram (Ext.freqMap extract)
-                  else Ext.buildGram
+--   let buildGram = if useTermFreq
+--                   then Ext.buildFreqGram (Ext.freqMap extract)
+--                   else Ext.buildGram
+  let buildGram = case gramType of
+        SubtreeSharing -> DAG.mkGram
+        NoSubtreeSharing -> DAG.mkDummy
+        TermFrequencies -> DAG.mkFreqGram (Ext.freqMap extract)
 
   -- weighted grammar
-  let freqGram = if useETFreq
-                 then M.fromList . map (\(et, freq) -> (et, 1 - freq)) $ M.toList relativeFreq
-                 else M.fromList . map (,1) . S.toList $ Ext.gramSet extract
+  let freqGram = M.fromList $
+        if useETFreq
+        then map (\(et, freq) -> (et, 1 - freq)) $ M.toList relativeFreq
+        else map (,1) . S.toList $ Ext.gramSet extract
 
   -- single global grammar for all
-  let globGram = buildGram freqGram
+  let globGram = buildGram (M.toList freqGram)
 
   putStrLn "\n===== PARSING TESTS =====\n"
   skladnica <- MWE.readTop skladnicaXML
@@ -165,6 +184,9 @@ runExperiment2 GlobalCfg{..} = do
         -- getWeight e = AStar.priWeight e + AStar.estWeight e
         getWeight = AStar.totalWeight
 
+    -- Stop if the two versions are identical.
+    guard $ maxLength == Nothing || Just sentLen <= maxLength
+
     -- Find the reference derivation trees corresponding to the syntactic trees
     refRegDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp sklTree
     refMweDeriv <- MaybeT $ Ext.findDeriv maxDerivNum begSym termTyp mweTree
@@ -183,8 +205,8 @@ runExperiment2 GlobalCfg{..} = do
       liftIO $ putStr "," >> putStr (show $ Ext.derivSize refMweDeriv)
 
       -- Build the local grammar (simple form of supertagging)
-      let localETs = Select.select' (S.fromList sent) freqGram -- (Ext.gramSet extract)
-          localGram = if restrictGrammar then buildGram localETs else globGram
+      let localETs = Select.select' (S.fromList sent) freqGram
+          localGram = if restrictGrammar then buildGram (M.toList localETs) else globGram
 
       -- Used to control the state of the parsing process
       contRef <- liftIO $ newIORef None
