@@ -57,6 +57,7 @@ library
       , NLP.Skladnica.Walenty.Mapping
 
     ghc-options: -Wall
+    -- cpp-options: -DNewHeuristic
 
 source-repository head
     type: git

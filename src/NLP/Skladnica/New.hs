@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
@@ -259,11 +260,14 @@ runExperiment2 GlobalCfg{..} = do
           -- interest to us here.
           E.guard (AStar.modifType hypeModif == AStar.NewNode)
 
---           -- Look only at regular, non-gapped items. For the sake of
---           -- a pseudo-monotonic heuristic.
---           E.guard $ case AStar.modifItem hypeModif of
---             AStar.ItemA q -> AStar._gap (AStar._spanA q) == Nothing
---             AStar.ItemP p -> AStar._gap (AStar._spanP p) == Nothing
+#ifdef NewHeuristic
+#else
+          -- Look only at regular, non-gapped items. For the sake of
+          -- a pseudo-monotonic heuristic.
+          E.guard $ case AStar.modifItem hypeModif of
+            AStar.ItemA q -> AStar._gap (AStar._spanA q) == Nothing
+            AStar.ItemP p -> AStar._gap (AStar._spanP p) == Nothing
+#endif
 
           cont <- liftIO (readIORef contRef)
           case cont of
